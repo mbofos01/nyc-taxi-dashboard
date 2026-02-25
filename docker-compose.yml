@@ -1,3 +1,19 @@
+x-wharfmap:
+  backgroundColor: "#f5f5f583"
+  backgroundBorderColor: "#cccccc"
+  backgroundBorderWidth: 2
+  networks:
+    etl-network:
+      color: "#acbde5"          # Light yellow for ETL network
+      border-color: "#8bb4df"
+      border-width: "2px"
+      border-style: "solid"
+  conditions:
+    service_healthy:
+      stroke-width: "1px"
+      stroke-dasharray: "0 0"
+
+
 services:
   extract:
     build: ETL/extract
@@ -13,6 +29,12 @@ services:
         condition: service_healthy     
     networks:
       - etl-network
+    x-wharfmap:
+      color: "#D82C20"
+      border-color: "#7A0C00"
+      border-width: "3px"      
+      border-style: "solid"
+
   
   transform:
     build: ETL/transform
@@ -30,6 +52,11 @@ services:
         condition: service_healthy     
     networks:
       - etl-network
+    x-wharfmap:
+      color: "#d89120"
+      border-color: "#aa731b"
+      border-width: "3px"      
+      border-style: "solid"
 
   rabbitMQ:
     image: rabbitmq:3-management
@@ -48,6 +75,11 @@ services:
       interval: 15s
       timeout: 10s
       retries: 5
+    x-wharfmap:
+      color: "#20a1d8"
+      border-color: "#1b33aa"
+      border-width: "1px"      
+      border-style: "dashed"
 
 volumes:
   rabbitmq_data:
