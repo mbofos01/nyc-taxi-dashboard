@@ -1,0 +1,41 @@
+services:
+  extract:
+    build: ETL/extract
+    container_name: extract-service
+    restart: unless-stopped
+    volumes:
+      - ./ETL/extract:/app
+      - taxi_raw_data:/data/raw      
+    command: ["python", "main.py"]
+    env_file: .env
+    depends_on:
+      rabbitMQ:
+        condition: service_healthy     
+    networks:
+      - etl-network
+
+  rabbitMQ:
+    image: rabbitmq:3-management
+    container_name: rabbitmq-service
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    networks:
+      - etl-network
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+
+volumes:
+  rabbitmq_data:
+  taxi_raw_data:
+
+networks:
+  etl-network:
+    driver: bridge
