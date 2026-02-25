@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 TLC_BASE_URL = "https://d37ci6vzurychx.cloudfront.net/trip-data"
 RAW_DATA_DIR = os.getenv("RAW_DATA_DIR", "/data/raw")
 # START_DATE = date(2019, 1, 1)
-START_DATE = date(2025, 1, 1)
+START_DATE = date(2023, 1, 1)
 
 TAXI_TYPES = ["yellow", "green", "fhv", "fhvhv"]
 
@@ -161,6 +161,7 @@ def get_expected_files() -> set[str]:
     expected = set()
     today = date.today()
     cutoff = date(today.year, today.month, 1) - relativedelta(months=3)
+    cutoff = date(2024, 12, 1)  # For testing with fixed cutoff
 
     for taxi_type in TAXI_TYPES:
         current = START_DATE
