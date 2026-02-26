@@ -260,11 +260,40 @@ services:
       border-color: "#901000"
       border-width: "1px"
       border-style: "dashed"
+
+  # Grafana: queries Prometheus and renders dashboards.
+  # Credentials default to admin/admin — override via .env or env vars.
+  grafana:
+    image: grafana/grafana:10.4.3
+    container_name: grafana-service
+    restart: unless-stopped
+    ports:
+      - "3000:3000"     # UI: http://localhost:3000
+    environment:
+      - GF_SECURITY_ADMIN_USER=${GRAFANA_ADMIN_USER:-admin}
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-admin}
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_LOG_LEVEL=warn
+      - GF_LOG_MODE=console
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+    depends_on:
+      - prometheus
+    networks:
+      - etl-network
+    x-wharfmap:
+      color: "#f2a500"
+      border-color: "#b07000"
+      border-width: "1px"
+      border-style: "dashed"
+
 volumes:
   rabbitmq_data:
   taxi_raw_data:
   taxi_processed_data:
   prometheus_data:
+  grafana_data:
   postgres_data:
   redis_data:
 
