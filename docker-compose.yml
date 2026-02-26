@@ -91,6 +91,29 @@ services:
       border-width: "3px"
       border-style: "solid"
 
+  # ── Model training ────────────────────────────────────────────────────────
+
+  fare-trainer:
+    build: models/fare
+    container_name: fare-trainer
+    restart: unless-stopped
+    volumes:
+      - ./models/fare:/app
+      - taxi_processed_data:/data/processed
+      - taxi_models_data:/data/models
+    command: ["python", "main.py"]
+    env_file: .env
+    depends_on:
+      rabbitMQ:
+        condition: service_healthy
+      spark-master:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - etl-network      # RabbitMQ + Spark + Pushgateway
+      - storage-network  # Redis
+
   # ── Spark cluster ──────────────────────────────────────────────────────────
 
   spark-master:
@@ -132,6 +155,7 @@ services:
     volumes:
       - taxi_raw_data:/data/raw
       - taxi_processed_data:/data/processed
+      - taxi_models_data:/data/models
     depends_on:
       spark-master:
         condition: service_healthy
@@ -320,6 +344,7 @@ volumes:
   rabbitmq_data:
   taxi_raw_data:
   taxi_processed_data:
+  taxi_models_data:
   prometheus_data:
   grafana_data:
   postgres_data:

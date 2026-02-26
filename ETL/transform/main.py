@@ -202,7 +202,7 @@ def agg_zone_hourly(df: DataFrame) -> DataFrame:
         aggs.append(F.avg("total_amount").alias("avg_total"))
 
     return df.groupBy(
-        "pickup_year", "pickup_month", "pickup_date",
+        "pickup_year", "pickup_month", "pickup_date", "pickup_dow",
         "pickup_hour", "pickup_location_id", "taxi_type"
     ).agg(*aggs)
 
