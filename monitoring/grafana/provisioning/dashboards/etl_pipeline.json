@@ -26,7 +26,7 @@
             "mode": "absolute",
             "steps": [
               { "color": "green", "value": null },
-              { "color": "red",   "value": 1 }
+              { "color": "green",   "value": 1 }
             ]
           },
           "unit": "none"
@@ -47,7 +47,7 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "${datasource}" },
-          "expr": "etl_extract_files_downloaded_total",
+          "expr": "extract_files_downloaded_total",
           "instant": true,
           "legendFormat": "Downloaded",
           "refId": "A"
@@ -84,7 +84,7 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "${datasource}" },
-          "expr": "etl_extract_files_skipped_total",
+          "expr": "extract_files_skipped_total",
           "instant": true,
           "legendFormat": "Skipped",
           "refId": "A"
@@ -124,7 +124,7 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "${datasource}" },
-          "expr": "etl_extract_files_failed_total",
+          "expr": "extract_files_not_found_total + extract_files_access_denied_total + extract_files_unavailable_total + extract_files_check_failed_total + extract_files_download_failed_total",
           "instant": true,
           "legendFormat": "Failures",
           "refId": "A"
@@ -161,7 +161,7 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "${datasource}" },
-          "expr": "etl_extract_total_duration_seconds",
+          "expr": "extract_total_duration_seconds",
           "instant": true,
           "legendFormat": "Duration",
           "refId": "A"
@@ -202,14 +202,64 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "${datasource}" },
-          "expr": "etl_extract_last_success_timestamp * 1000",
+          "expr": "extract_last_run_timestamp * 1000",
           "instant": true,
-          "legendFormat": "Last success",
+          "legendFormat": "Last run",
           "refId": "A"
         }
       ],
-      "title": "Extract Last Success",
+      "title": "Extract Last Run",
       "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "files",
+            "axisPlacement": "auto",
+            "fillOpacity": 60,
+            "gradientMode": "none",
+            "hideFrom": { "legend": false, "tooltip": false, "viz": false },
+            "lineWidth": 1,
+            "scaleDistribution": { "type": "linear" },
+            "thresholdsStyle": { "mode": "off" }
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 5 },
+      "id": 6,
+      "options": {
+        "barRadius": 0.05,
+        "barWidth": 0.7,
+        "fullHighlight": false,
+        "groupWidth": 0.7,
+        "legend": { "calcs": ["lastNotNull"], "displayMode": "table", "placement": "right", "showLegend": true },
+        "orientation": "auto",
+        "showValue": "always",
+        "stacking": "none",
+        "tooltip": { "mode": "multi", "sort": "desc" },
+        "xTickLabelRotation": -30,
+        "xTickLabelSpacing": 200
+      },
+      "pluginVersion": "10.4.3",
+      "targets": [
+        { "datasource": { "type": "prometheus", "uid": "${datasource}" }, "expr": "extract_files_downloaded_total",     "instant": true, "legendFormat": "Downloaded",        "refId": "A" },
+        { "datasource": { "type": "prometheus", "uid": "${datasource}" }, "expr": "extract_files_skipped_total",       "instant": true, "legendFormat": "Skipped",            "refId": "B" },
+        { "datasource": { "type": "prometheus", "uid": "${datasource}" }, "expr": "extract_files_not_found_total",     "instant": true, "legendFormat": "Not Found (404)",    "refId": "C" },
+        { "datasource": { "type": "prometheus", "uid": "${datasource}" }, "expr": "extract_files_access_denied_total", "instant": true, "legendFormat": "Access Denied (403)", "refId": "D" },
+        { "datasource": { "type": "prometheus", "uid": "${datasource}" }, "expr": "extract_files_unavailable_total",   "instant": true, "legendFormat": "Unavailable",        "refId": "E" },
+        { "datasource": { "type": "prometheus", "uid": "${datasource}" }, "expr": "extract_files_check_failed_total",  "instant": true, "legendFormat": "Check Failed",       "refId": "F" },
+        { "datasource": { "type": "prometheus", "uid": "${datasource}" }, "expr": "extract_files_download_failed_total","instant": true, "legendFormat": "Download Failed",   "refId": "G" }
+      ],
+      "title": "File Outcome Count",
+      "type": "barchart"
     },
     {
       "datasource": { "type": "prometheus", "uid": "${datasource}" },
@@ -233,16 +283,16 @@
         },
         "overrides": []
       },
-      "gridPos": { "h": 7, "w": 24, "x": 0, "y": 5 },
-      "id": 6,
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 5 },
+      "id": 32,
       "options": {
         "barRadius": 0.05,
         "barWidth": 0.7,
         "fullHighlight": false,
         "groupWidth": 0.7,
-        "legend": { "calcs": ["mean", "max"], "displayMode": "table", "placement": "right", "showLegend": true },
+        "legend": { "calcs": ["lastNotNull"], "displayMode": "table", "placement": "right", "showLegend": true },
         "orientation": "auto",
-        "showValue": "never",
+        "showValue": "always",
         "stacking": "none",
         "tooltip": { "mode": "multi", "sort": "desc" },
         "xTickLabelRotation": -30,
@@ -250,20 +300,107 @@
       },
       "pluginVersion": "10.4.3",
       "targets": [
+        { "datasource": { "type": "prometheus", "uid": "${datasource}" }, "expr": "extract_outcome_duration_seconds{outcome=\"downloaded\"}",     "instant": true, "legendFormat": "Downloaded",        "refId": "A" },
+        { "datasource": { "type": "prometheus", "uid": "${datasource}" }, "expr": "extract_outcome_duration_seconds{outcome=\"already_exists\"}",  "instant": true, "legendFormat": "Skipped",            "refId": "B" },
+        { "datasource": { "type": "prometheus", "uid": "${datasource}" }, "expr": "extract_outcome_duration_seconds{outcome=\"not_found\"}",       "instant": true, "legendFormat": "Not Found (404)",    "refId": "C" },
+        { "datasource": { "type": "prometheus", "uid": "${datasource}" }, "expr": "extract_outcome_duration_seconds{outcome=\"access_denied\"}",   "instant": true, "legendFormat": "Access Denied (403)", "refId": "D" },
+        { "datasource": { "type": "prometheus", "uid": "${datasource}" }, "expr": "extract_outcome_duration_seconds{outcome=\"unavailable\"}",     "instant": true, "legendFormat": "Unavailable",        "refId": "E" },
+        { "datasource": { "type": "prometheus", "uid": "${datasource}" }, "expr": "extract_outcome_duration_seconds{outcome=\"check_failed\"}",    "instant": true, "legendFormat": "Check Failed",       "refId": "F" },
+        { "datasource": { "type": "prometheus", "uid": "${datasource}" }, "expr": "extract_outcome_duration_seconds{outcome=\"download_failed\"}", "instant": true, "legendFormat": "Download Failed",   "refId": "G" }
+      ],
+      "title": "File Outcome Duration",
+      "type": "barchart"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [{ "color": "blue", "value": null }]
+          },
+          "unit": "bytes"
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 8, "w": 6, "x": 0, "y": 12 },
+      "id": 30,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "orientation": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "auto"
+      },
+      "pluginVersion": "10.4.3",
+      "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "${datasource}" },
-          "expr": "etl_extract_download_duration_seconds",
+          "expr": "extract_total_disk_bytes",
           "instant": true,
-          "legendFormat": "{{filename}}",
+          "legendFormat": "Total on disk",
           "refId": "A"
         }
       ],
-      "title": "Download Duration per File",
+      "title": "Total Raw Data on Disk",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "bytes",
+            "axisPlacement": "auto",
+            "fillOpacity": 60,
+            "gradientMode": "none",
+            "hideFrom": { "legend": false, "tooltip": false, "viz": false },
+            "lineWidth": 1,
+            "scaleDistribution": { "type": "linear" },
+            "thresholdsStyle": { "mode": "off" }
+          },
+          "unit": "bytes"
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 8, "w": 18, "x": 6, "y": 12 },
+      "id": 31,
+      "options": {
+        "barRadius": 0.05,
+        "barWidth": 0.6,
+        "fullHighlight": false,
+        "groupWidth": 0.7,
+        "legend": { "calcs": ["sum"], "displayMode": "table", "placement": "right", "showLegend": true },
+        "orientation": "auto",
+        "showValue": "never",
+        "stacking": "none",
+        "tooltip": { "mode": "multi", "sort": "desc" },
+        "xTickLabelRotation": -30,
+        "xTickLabelSpacing": 150
+      },
+      "pluginVersion": "10.4.3",
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "expr": "extract_file_size_bytes",
+          "instant": true,
+          "legendFormat": "{{taxi_type}} / {{filename}}",
+          "refId": "A"
+        }
+      ],
+      "title": "File Size per Raw Parquet (downloaded + pre-existing)",
       "type": "barchart"
     },
     {
       "collapsed": false,
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 12 },
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 20 },
       "id": 101,
       "title": "Transform — Last Run",
       "type": "row"
@@ -285,7 +422,7 @@
         },
         "overrides": []
       },
-      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 13 },
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 21 },
       "id": 7,
       "options": {
         "colorMode": "background",
@@ -322,7 +459,7 @@
         },
         "overrides": []
       },
-      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 13 },
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 21 },
       "id": 8,
       "options": {
         "colorMode": "background",
@@ -356,7 +493,7 @@
         },
         "overrides": []
       },
-      "gridPos": { "h": 4, "w": 4, "x": 12, "y": 13 },
+      "gridPos": { "h": 4, "w": 4, "x": 12, "y": 21 },
       "id": 20,
       "options": { "colorMode": "background", "graphMode": "none", "justifyMode": "center", "orientation": "auto", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "textMode": "auto" },
       "pluginVersion": "10.4.3",
@@ -375,7 +512,7 @@
         },
         "overrides": []
       },
-      "gridPos": { "h": 4, "w": 8, "x": 16, "y": 13 },
+      "gridPos": { "h": 4, "w": 8, "x": 16, "y": 21 },
       "id": 9,
       "options": { "colorMode": "background", "graphMode": "none", "justifyMode": "center", "orientation": "auto", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "textMode": "auto" },
       "pluginVersion": "10.4.3",
@@ -393,7 +530,7 @@
         },
         "overrides": []
       },
-      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 17 },
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 25 },
       "id": 10,
       "options": { "barRadius": 0.05, "barWidth": 0.6, "fullHighlight": false, "groupWidth": 0.7, "legend": { "calcs": [], "displayMode": "list", "placement": "bottom", "showLegend": true }, "orientation": "auto", "showValue": "auto", "stacking": "none", "tooltip": { "mode": "multi", "sort": "desc" }, "xTickLabelRotation": 0, "xTickLabelSpacing": 100 },
       "pluginVersion": "10.4.3",
@@ -415,7 +552,7 @@
         },
         "overrides": []
       },
-      "gridPos": { "h": 7, "w": 8, "x": 12, "y": 17 },
+      "gridPos": { "h": 7, "w": 8, "x": 12, "y": 25 },
       "id": 11,
       "options": { "displayLabels": ["name", "percent"], "legend": { "displayMode": "table", "placement": "right", "showLegend": true, "values": ["value", "percent"] }, "pieType": "donut", "tooltip": { "mode": "single", "sort": "none" } },
       "pluginVersion": "10.4.3",
@@ -436,7 +573,7 @@
         },
         "overrides": []
       },
-      "gridPos": { "h": 7, "w": 4, "x": 20, "y": 17 },
+      "gridPos": { "h": 7, "w": 4, "x": 20, "y": 25 },
       "id": 21,
       "options": { "colorMode": "background", "graphMode": "none", "justifyMode": "center", "orientation": "vertical", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "textMode": "auto" },
       "pluginVersion": "10.4.3",
@@ -447,7 +584,7 @@
 
     {
       "collapsed": false,
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 24 },
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 32 },
       "id": 103,
       "title": "Load — Last Run",
       "type": "row"
@@ -463,7 +600,7 @@
         },
         "overrides": []
       },
-      "gridPos": { "h": 4, "w": 5, "x": 0, "y": 25 },
+      "gridPos": { "h": 4, "w": 5, "x": 0, "y": 33 },
       "id": 14,
       "options": { "colorMode": "background", "graphMode": "none", "justifyMode": "center", "orientation": "auto", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "textMode": "auto" },
       "pluginVersion": "10.4.3",
@@ -482,7 +619,7 @@
         },
         "overrides": []
       },
-      "gridPos": { "h": 4, "w": 5, "x": 5, "y": 25 },
+      "gridPos": { "h": 4, "w": 5, "x": 5, "y": 33 },
       "id": 15,
       "options": { "colorMode": "background", "graphMode": "none", "justifyMode": "center", "orientation": "auto", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "textMode": "auto" },
       "pluginVersion": "10.4.3",
@@ -501,7 +638,7 @@
         },
         "overrides": []
       },
-      "gridPos": { "h": 4, "w": 5, "x": 10, "y": 25 },
+      "gridPos": { "h": 4, "w": 5, "x": 10, "y": 33 },
       "id": 16,
       "options": { "colorMode": "background", "graphMode": "none", "justifyMode": "center", "orientation": "auto", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "textMode": "auto" },
       "pluginVersion": "10.4.3",
@@ -520,7 +657,7 @@
         },
         "overrides": []
       },
-      "gridPos": { "h": 4, "w": 9, "x": 15, "y": 25 },
+      "gridPos": { "h": 4, "w": 9, "x": 15, "y": 33 },
       "id": 17,
       "options": { "colorMode": "background", "graphMode": "none", "justifyMode": "center", "orientation": "auto", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "textMode": "auto" },
       "pluginVersion": "10.4.3",
@@ -538,7 +675,7 @@
         },
         "overrides": []
       },
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 29 },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 37 },
       "id": 18,
       "options": { "barRadius": 0.05, "barWidth": 0.6, "fullHighlight": false, "groupWidth": 0.7, "legend": { "calcs": ["sum"], "displayMode": "table", "placement": "right", "showLegend": true }, "orientation": "auto", "showValue": "auto", "stacking": "none", "tooltip": { "mode": "multi", "sort": "desc" }, "xTickLabelRotation": -20, "xTickLabelSpacing": 100 },
       "pluginVersion": "10.4.3",
@@ -556,7 +693,7 @@
         },
         "overrides": []
       },
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 29 },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 37 },
       "id": 19,
       "options": { "barRadius": 0.05, "barWidth": 0.6, "fullHighlight": false, "groupWidth": 0.7, "legend": { "calcs": ["mean", "max"], "displayMode": "table", "placement": "right", "showLegend": true }, "orientation": "auto", "showValue": "never", "stacking": "none", "tooltip": { "mode": "multi", "sort": "desc" }, "xTickLabelRotation": -20, "xTickLabelSpacing": 100 },
       "pluginVersion": "10.4.3",
@@ -575,7 +712,7 @@
         },
         "overrides": []
       },
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 37 },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 45 },
       "id": 22,
       "options": { "displayLabels": ["name", "percent"], "legend": { "displayMode": "table", "placement": "right", "showLegend": true, "values": ["value", "percent"] }, "pieType": "donut", "tooltip": { "mode": "single", "sort": "none" } },
       "pluginVersion": "10.4.3",
@@ -594,7 +731,7 @@
         },
         "overrides": []
       },
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 37 },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 45 },
       "id": 23,
       "options": { "displayLabels": ["name", "percent"], "legend": { "displayMode": "table", "placement": "right", "showLegend": true, "values": ["value", "percent"] }, "pieType": "donut", "tooltip": { "mode": "single", "sort": "none" } },
       "pluginVersion": "10.4.3",
@@ -605,7 +742,7 @@
 
     {
       "collapsed": false,
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 45 },
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 53 },
       "id": 102,
       "title": "Pipeline Health",
       "type": "row"
@@ -621,12 +758,12 @@
         },
         "overrides": []
       },
-      "gridPos": { "h": 4, "w": 24, "x": 0, "y": 46 },
+      "gridPos": { "h": 4, "w": 24, "x": 0, "y": 54 },
       "id": 12,
       "options": { "colorMode": "background", "graphMode": "none", "justifyMode": "center", "orientation": "auto", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "textMode": "value_and_name" },
       "pluginVersion": "10.4.3",
       "targets": [
-        { "datasource": { "type": "prometheus", "uid": "${datasource}" }, "expr": "etl_extract_last_success_timestamp * 1000",   "instant": true, "legendFormat": "Extract",   "refId": "A" },
+        { "datasource": { "type": "prometheus", "uid": "${datasource}" }, "expr": "extract_last_run_timestamp * 1000",   "instant": true, "legendFormat": "Extract",   "refId": "A" },
         { "datasource": { "type": "prometheus", "uid": "${datasource}" }, "expr": "etl_transform_last_success_timestamp * 1000", "instant": true, "legendFormat": "Transform", "refId": "B" },
         { "datasource": { "type": "prometheus", "uid": "${datasource}" }, "expr": "etl_load_last_success_timestamp * 1000",      "instant": true, "legendFormat": "Load",      "refId": "C" }
       ],
@@ -644,12 +781,12 @@
         },
         "overrides": []
       },
-      "gridPos": { "h": 4, "w": 24, "x": 0, "y": 50 },
+      "gridPos": { "h": 4, "w": 24, "x": 0, "y": 58 },
       "id": 13,
       "options": { "colorMode": "background", "graphMode": "none", "justifyMode": "center", "orientation": "auto", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "textMode": "value_and_name" },
       "pluginVersion": "10.4.3",
       "targets": [
-        { "datasource": { "type": "prometheus", "uid": "${datasource}" }, "expr": "etl_extract_files_failed_total", "instant": true, "legendFormat": "Extract failures", "refId": "A" },
+        { "datasource": { "type": "prometheus", "uid": "${datasource}" }, "expr": "extract_files_not_found_total + extract_files_access_denied_total + extract_files_unavailable_total + extract_files_check_failed_total + extract_files_download_failed_total", "instant": true, "legendFormat": "Extract failures", "refId": "A" },
         { "datasource": { "type": "prometheus", "uid": "${datasource}" }, "expr": "etl_load_failures_total",        "instant": true, "legendFormat": "Load failures",      "refId": "B" }
       ],
       "title": "Failure Summary — All Stages",
@@ -665,12 +802,12 @@
         },
         "overrides": []
       },
-      "gridPos": { "h": 7, "w": 24, "x": 0, "y": 54 },
+      "gridPos": { "h": 7, "w": 24, "x": 0, "y": 62 },
       "id": 24,
       "options": { "barRadius": 0.05, "barWidth": 0.5, "fullHighlight": false, "groupWidth": 0.7, "legend": { "calcs": [], "displayMode": "list", "placement": "right", "showLegend": true }, "orientation": "auto", "showValue": "auto", "stacking": "none", "tooltip": { "mode": "multi", "sort": "desc" }, "xTickLabelRotation": 0, "xTickLabelSpacing": 100 },
       "pluginVersion": "10.4.3",
       "targets": [
-        { "datasource": { "type": "prometheus", "uid": "${datasource}" }, "expr": "etl_extract_total_duration_seconds",            "instant": true, "legendFormat": "Extract",   "refId": "A" },
+        { "datasource": { "type": "prometheus", "uid": "${datasource}" }, "expr": "extract_total_duration_seconds",            "instant": true, "legendFormat": "Extract",   "refId": "A" },
         { "datasource": { "type": "prometheus", "uid": "${datasource}" }, "expr": "sum(etl_transform_processing_duration_seconds)", "instant": true, "legendFormat": "Transform", "refId": "B" },
         { "datasource": { "type": "prometheus", "uid": "${datasource}" }, "expr": "etl_load_total_duration_seconds",                "instant": true, "legendFormat": "Load",      "refId": "C" }
       ],

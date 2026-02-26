@@ -1,9 +1,11 @@
+import glob
 import os
 import logging
 import sys
 import time
 import json
-from datetime import date
+from datetime import date, datetime, timezone
+from enum import Enum, auto
 from pathlib import Path
 
 import requests
@@ -23,82 +25,105 @@ logging.getLogger("pika").setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 
 # ── Config ─────────────────────────────────────────────────────────────────
-TLC_BASE_URL = "https://d37ci6vzurychx.cloudfront.net/trip-data"
-RAW_DATA_DIR = os.getenv("RAW_DATA_DIR", "/data/raw")
+TLC_BASE_URL = os.getenv("TLC_BASE_URL")
+RAW_DATA_DIR = os.getenv("RAW_DATA_DIR")
+SERVER_TIMEOUT = int(os.getenv("SERVER_TIMEOUT", 15))  # seconds
 # START_DATE = date(2019, 1, 1)
 START_DATE = date(2023, 1, 1)
-
 # TAXI_TYPES = ["yellow", "green", "fhv", "fhvhv"]
 TAXI_TYPES = ["yellow", "green"]
 
-RABBITMQ_HOST = os.getenv("RABBITMQ_HOST", "rabbitmq")
-RABBITMQ_PORT = int(os.getenv("RABBITMQ_PORT", 5672))
-RABBITMQ_USER = os.getenv("RABBITMQ_USER", "guest")
-RABBITMQ_PASSWORD = os.getenv("RABBITMQ_PASSWORD", "guest")
-RABBITMQ_QUEUE = os.getenv("RABBITMQ_E_QUEUE", "etl.extracted")
+RABBITMQ_HOST = os.getenv("RABBITMQ_HOST")
+RABBITMQ_PORT = int(os.getenv("RABBITMQ_PORT"))
+RABBITMQ_USER = os.getenv("RABBITMQ_USER")
+RABBITMQ_PASSWORD = os.getenv("RABBITMQ_PASSWORD")
+RABBITMQ_QUEUE = os.getenv("RABBITMQ_E_QUEUE")
+PUSHGATEWAY_URL = os.getenv("PUSHGATEWAY_URL")
 
-PUSHGATEWAY_URL = os.getenv("PUSHGATEWAY_URL", "http://pushgateway:9091")
+CRON_DAY = os.getenv("EXTRACT_CRON_DAY",  "15")   # day-of-month to run
+CRON_HOUR = os.getenv("EXTRACT_CRON_HOUR", "2")    # UTC hour to run
 
-# ── Helpers ────────────────────────────────────────────────────────────────
+
+# ── Download result ────────────────────────────────────────────────────────
+
+class DownloadResult(Enum):
+    ALREADY_EXISTS = auto()  # file was present on disk, skipped
+    DOWNLOADED = auto()  # file fetched successfully
+    NOT_FOUND = auto()  # HTTP 404 — data not released yet
+    ACCESS_DENIED = auto()  # HTTP 403 — permission / CDN issue
+    UNAVAILABLE = auto()  # other non-OK HTTP status
+    CHECK_FAILED = auto()  # network error during HEAD check
+    DOWNLOAD_FAILED = auto()  # network / IO error during GET
 
 
-def build_url(taxi_type: str, year: int, month: int) -> str:
+def _file_path_builder(taxi_type: str, year: int, month: int, create_full_path: bool = False, raw_file_dir: str = RAW_DATA_DIR, create_url: bool = False, base_url: str = TLC_BASE_URL) -> Path | str:
     """
-    This function constructs the URL for the Parquet file based on the taxi type, year, and month.
+    Builds the file path for a given taxi type, year, and month. Can either return a full local file path or a URL to the TLC data.
 
-    URL format: https://d37ci6vzurychx.cloudfront.net/trip-data/{taxi_type}_tripdata_{year}-{month:02d}.parquet
+    Example: https://d37ci6vzurychx.cloudfront.net/trip-data/yellow_tripdata_2024-10.parquet
 
     Args:
-        taxi_type (str): The type of taxi (e.g., "yellow", "green", "fhv", "fhvhv").
-        year (int): The year of the trip data (e.g., 2019).
-        month (int): The month of the trip data (1-12).
+        taxi_type (str): The type of taxi (e.g., "yellow", "green").
+        year (int): The year of the data.
+        month (int): The month of the data.
 
     Returns:
-        str: The constructed URL for the Parquet file.
+        Path or str: The file path or URL for the specified taxi data.
     """
-    return f"{TLC_BASE_URL}/{taxi_type}_tripdata_{year}-{month:02d}.parquet"
+    global TAXI_TYPES
+    assert taxi_type in TAXI_TYPES, f"Invalid taxi type: {taxi_type}"
+    assert 1 <= month <= 12, f"Invalid month: {month}"
+    assert not (
+        create_full_path and create_url), "Cannot create both full path and URL at the same time"
+
+    if create_url:
+        return f"{base_url}/{taxi_type}_tripdata_{year}-{month:02d}.parquet"
+
+    if create_full_path:
+        full_path = Path(raw_file_dir) / \
+            f"{taxi_type}_tripdata_{year}-{month:02d}.parquet"
+        return full_path
+
+    return f"{taxi_type}_tripdata_{year}-{month:02d}.parquet"
 
 
-def dest_path(taxi_type: str, year: int, month: int) -> Path:
+def _download_file(url: str, dest: Path) -> DownloadResult:
     """
-    This function generates the local file path where the downloaded Parquet file should be saved.
-    The path is structured as: /data/raw/{taxi_type}/{year}/{taxi
-
-    Args:
-        taxi_type (str): The type of taxi (e.g., "yellow", "green", "fhv", "fhvhv").
-        year (int): The year of the trip data (e.g., 2019).
-        month (int): The month of the trip data (1-12).
-
-    Returns:
-        Path: The local file path for the downloaded Parquet file.
-    """
-    path = Path(RAW_DATA_DIR) / taxi_type / str(year)
-    path.mkdir(parents=True, exist_ok=True)
-    return path / f"{taxi_type}_{year}-{month:02d}.parquet"
-
-
-def download_file(url: str, dest: Path) -> bool:
-    """
-    This function downloads a file from the specified URL and saves it to the given destination path.
-    If the file already exists at the destination, it skips the download.
+    Downloads a file from the specified URL and saves it to dest.
+    Performs a HEAD check first to confirm availability before streaming.
 
     Args:
         url (str): The URL of the file to download.
         dest (Path): The local file path where the downloaded file should be saved.
 
     Returns:
-        bool: True if the file was downloaded or already exists, False if the download failed (e.g., 404 or network error).
+        DownloadResult: outcome of the operation.
     """
     if dest.exists():
+        # theoretically should never hit this since we check before adding to the queue, but good to be safe
         logger.info(f"Already exists, skipping: {dest.name}")
-        return True
+        return DownloadResult.ALREADY_EXISTS
 
-    logger.info(f"Downloading: {url}")
+    logger.info(f"Checking availability: {url}")
+    try:
+        head = requests.head(url, timeout=15, allow_redirects=True)
+        if head.status_code == 404:
+            logger.warning(f"Not found (404): {url}")
+            return DownloadResult.NOT_FOUND
+        if head.status_code == 403:
+            logger.warning(f"Access denied (403): {url}")
+            return DownloadResult.ACCESS_DENIED
+        if not head.ok:
+            logger.warning(
+                f"Resource unavailable (HTTP {head.status_code}): {url}")
+            return DownloadResult.UNAVAILABLE
+        logger.info(f"Resource available, downloading: {url}")
+    except Exception as e:
+        logger.error(f"Availability check failed for {url}: {e}")
+        return DownloadResult.CHECK_FAILED
+
     try:
         response = requests.get(url, stream=True, timeout=60)
-        if response.status_code == 404:
-            logger.warning(f"Not found (404): {url}")
-            return False
         response.raise_for_status()
 
         with open(dest, "wb") as f:
@@ -106,19 +131,60 @@ def download_file(url: str, dest: Path) -> bool:
                 f.write(chunk)
 
         logger.info(f"Saved: {dest.name} ({dest.stat().st_size / 1e6:.1f} MB)")
-        return True
+        return DownloadResult.DOWNLOADED
 
     except Exception as e:
         logger.error(f"Failed to download {url}: {e}")
         if dest.exists():
             dest.unlink()  # Remove partial file
-        return False
+        return DownloadResult.DOWNLOAD_FAILED
+
+
+def _calculate_end_date():
+    """
+    Due to the way that TLC releases data, we want to set the end date to 3 months ago (the last month that should be fully available).
+
+    Returns:
+        date: The calculated end date.
+    """
+    today = date.today()
+    return date(today.year, today.month, 1) - relativedelta(months=3)
+
+
+def _check_existing_files(start_date: date, end_date: date, taxi_types: list, raw_data_dir: str = RAW_DATA_DIR) -> tuple[list[Path], int]:
+    missing_urls = []
+    existing_files = 0
+    for taxi_type in taxi_types:
+        current = start_date
+        while current <= end_date:
+            expected_file = _file_path_builder(
+                taxi_type, current.year, current.month, create_full_path=True)
+            if not expected_file.exists():
+                logger.warning(f"Missing file: {expected_file}")
+                target_url = _file_path_builder(
+                    taxi_type, current.year, current.month, create_full_path=False, create_url=True)
+                target_path = _file_path_builder(
+                    taxi_type, current.year, current.month, create_full_path=True)
+                missing_urls.append((target_url, target_path))
+            else:
+                logger.info(f"File exists: {expected_file}")
+                existing_files += 1
+            current += relativedelta(months=1)
+
+    return missing_urls, existing_files
+
+
+def _results_summary(attempts: list[tuple[str, Path, DownloadResult]]) -> str:
+    summary = {}
+    for _, _, outcome in attempts:
+        summary[outcome] = summary.get(outcome, 0) + 1
+    return ", ".join(f"{outcome.name}: {count}" for outcome, count in summary.items())
 
 
 def publish(payload: dict) -> None:
     """
     This function publishes a message to a RabbitMQ queue.
-    It establishes a connection to the RabbitMQ server using the provided credentials and connection parameters. 
+    It establishes a connection to the RabbitMQ server using the provided credentials and connection parameters.
     The message is published to the specified queue in JSON format.
 
     Args:
@@ -154,192 +220,115 @@ def publish(payload: dict) -> None:
     logger.error("Could not publish to RabbitMQ after 5 attempts.")
 
 
-# ── Core ETL logic ─────────────────────────────────────────────────────────
-
-def _push_metrics(registry: CollectorRegistry, job: str) -> None:
-    """Push collected metrics to Prometheus Pushgateway. Logs a warning on failure."""
-    try:
-        push_to_gateway(PUSHGATEWAY_URL, job=job, registry=registry)
-        logger.info(f"Metrics pushed to Pushgateway ({PUSHGATEWAY_URL}) for job '{job}'.")
-    except Exception as e:
-        logger.warning(f"Failed to push metrics to Pushgateway: {e}")
-
-
-def get_expected_files() -> set[str]:
-    """
-    This function generates a set of expected filenames for the taxi trip data Parquet files based on the defined taxi types and a date range starting from January 2019 up to two months before the current date. 
-    The filenames follow the format: {taxi_type}_{year}-{month:02d}.parquet.
-    The function calculates the cutoff date as the first day of the current month minus three months to ensure that it only includes files that should be available for download, accounting for any potential delays in data availability.
-    """
-
-    expected = set()
-    today = date.today()
-    cutoff = date(today.year, today.month, 1) - relativedelta(months=3)
-    # cutoff = date(2023, 4, 1)  # For testing with fixed cutoff
-
-    for taxi_type in TAXI_TYPES:
-        current = START_DATE
-        while current <= cutoff:
-            expected.add(
-                f"{taxi_type}_{current.year}-{current.month:02d}.parquet")
-            current += relativedelta(months=1)
-
-    return expected
-
-
-def get_local_files() -> set[str]:
-    """
-    This function scans the local directory specified by RAW_DATA_DIR for any existing Parquet files and returns a set of their filenames.
-    """
-    local = set()
-    for path in Path(RAW_DATA_DIR).rglob("*.parquet"):
-        local.add(path.name)
-    return local
-
-
-def run_extraction() -> None:
-    """
-    This function performs the extraction process for the taxi trip data.
-    It identifies the expected files, checks for missing files, downloads them if necessary,
-    publishes the extraction status to RabbitMQ, and pushes Prometheus metrics.
-    """
+def run_extraction():
     run_start = time.time()
-    logger.info("=== Starting extraction ===")
+    targets, existing_files = _check_existing_files(
+        START_DATE, _calculate_end_date(), TAXI_TYPES)
 
     # ── Prometheus metrics ─────────────────────────────────────────────────
-    registry          = CollectorRegistry()
-    files_downloaded  = Gauge(
-        "etl_extract_files_downloaded_total",
-        "Number of files downloaded in this run",
-        registry=registry,
-    )
-    files_skipped     = Gauge(
-        "etl_extract_files_skipped_total",
-        "Number of files skipped because they were already present on disk",
-        registry=registry,
-    )
-    files_failed      = Gauge(
-        "etl_extract_files_failed_total",
-        "Number of files that failed to download",
-        registry=registry,
-    )
-    download_duration = Gauge(
-        "etl_extract_download_duration_seconds",
-        "Download duration per file in seconds",
-        ["filename"],
-        registry=registry,
-    )
-    total_duration    = Gauge(
-        "etl_extract_total_duration_seconds",
-        "Total extraction run duration in seconds",
-        registry=registry,
-    )
-    last_success_ts   = Gauge(
-        "etl_extract_last_success_timestamp",
-        "Unix timestamp of the last successful extraction run",
-        registry=registry,
-    )
+    registry = CollectorRegistry()
+    g_downloaded = Gauge("extract_files_downloaded_total",
+                         "Files successfully downloaded this run",
+                         registry=registry)
+    g_skipped = Gauge("extract_files_skipped_total",
+                      "Files skipped because they already existed on disk",
+                      registry=registry)
+    g_not_found = Gauge("extract_files_not_found_total",
+                        "Files that returned HTTP 404 (not yet released)",
+                        registry=registry)
+    g_access_denied = Gauge("extract_files_access_denied_total",
+                            "Files that returned HTTP 403",
+                            registry=registry)
+    g_unavailable = Gauge("extract_files_unavailable_total",
+                          "Files that returned another non-OK HTTP status",
+                          registry=registry)
+    g_check_failed = Gauge("extract_files_check_failed_total",
+                           "Files where the HEAD availability check failed",
+                           registry=registry)
+    g_download_failed = Gauge("extract_files_download_failed_total",
+                              "Files where the GET download failed",
+                              registry=registry)
+    g_duration = Gauge("extract_total_duration_seconds",
+                       "Total wall-clock time of the extraction run",
+                       registry=registry)
+    g_last_run = Gauge("extract_last_run_timestamp",
+                       "Unix timestamp of the last extraction run",
+                       registry=registry)
+    g_file_size = Gauge("extract_file_size_bytes",
+                        "Size of each raw parquet file on disk in bytes",
+                        ["taxi_type", "filename"],
+                        registry=registry)
+    g_total_size = Gauge("extract_total_disk_bytes",
+                         "Total bytes of all raw parquet files on disk",
+                         registry=registry)
+    g_outcome_duration = Gauge("extract_outcome_duration_seconds",
+                               "Total seconds spent on files with each outcome",
+                               ["outcome"],
+                               registry=registry)
     # ──────────────────────────────────────────────────────────────────────
 
-    expected = get_expected_files()
-    local    = get_local_files()
-    missing  = expected - local
+    counters = {r: 0 for r in DownloadResult}
+    outcome_durations = {r: 0.0 for r in DownloadResult}
+    attempts = []
+    for url, path in targets:
+        t0 = time.time()
+        outcome = _download_file(url, path)
+        outcome_durations[outcome] += time.time() - t0
+        attempts.append((url, path, outcome))
+        counters[outcome] += 1
+        time.sleep(SERVER_TIMEOUT)  # be kind to the server
 
-    already_present = len(expected) - len(missing)  # files we can skip entirely
+    g_downloaded.set(counters[DownloadResult.DOWNLOADED])
+    g_skipped.set(counters[DownloadResult.ALREADY_EXISTS]+existing_files)
+    g_not_found.set(counters[DownloadResult.NOT_FOUND])
+    g_access_denied.set(counters[DownloadResult.ACCESS_DENIED])
+    g_unavailable.set(counters[DownloadResult.UNAVAILABLE])
+    g_check_failed.set(counters[DownloadResult.CHECK_FAILED])
+    g_download_failed.set(counters[DownloadResult.DOWNLOAD_FAILED])
+    for result, dur in outcome_durations.items():
+        g_outcome_duration.labels(outcome=result.name.lower()).set(dur)
+    g_duration.set(time.time() - run_start)
+    g_last_run.set(time.time())
 
-    if not missing:
-        logger.info("All files already up to date — nothing to download.")
-        files_downloaded.set(0)
-        files_skipped.set(already_present)
-        files_failed.set(0)
-        total_duration.set(time.time() - run_start)
-        last_success_ts.set(time.time())
-        _push_metrics(registry, "etl_extract")
-        publish({"event": "extraction_complete", "action": "no-op"})
-        return
+    # ── File sizes (all files currently on disk, including pre-existing) ──
+    total_bytes = 0
+    raw_dir = Path(RAW_DATA_DIR)
+    for taxi_type in TAXI_TYPES:
+        for f in raw_dir.glob(f"{taxi_type}_tripdata_*.parquet"):
+            size = f.stat().st_size
+            g_file_size.labels(taxi_type=taxi_type, filename=f.name).set(size)
+            total_bytes += size
+    g_total_size.set(total_bytes)
 
-    logger.info(f"Found {len(missing)} new file(s) to download.")
+    try:
+        push_to_gateway(PUSHGATEWAY_URL, job="etl_extract", registry=registry)
+        logger.info(f"Metrics pushed to Pushgateway ({PUSHGATEWAY_URL}).")
+    except Exception as e:
+        logger.warning(f"Failed to push metrics: {e}")
 
-    downloaded     = []
-    downloaded_cnt = 0
-    skipped_cnt    = already_present
-    failures_cnt   = 0
+    logger.info(f"Summary: {_results_summary(attempts)}")
+    publish({
+        "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC"),
+        "event": "extraction_completed",
+        "summary": f"{counters[DownloadResult.DOWNLOADED]} new files downloaded",
+        "new_files": counters[DownloadResult.DOWNLOADED],
+    })
 
-    for filename in sorted(missing):
-        # Parse taxi_type, year, month back from filename
-        # e.g. "yellow_2024-01.parquet" → yellow, 2024, 1
-        parts     = filename.replace(".parquet", "").rsplit("_", 1)
-        taxi_type = parts[0]
-        year, month = map(int, parts[1].split("-"))
-
-        url  = build_url(taxi_type, year, month)
-        dest = dest_path(taxi_type, year, month)
-
-        # File may have appeared since we scanned (race condition) — count as skip
-        if dest.exists():
-            skipped_cnt += 1
-            time.sleep(1)
-            continue
-
-        t0      = time.time()
-        success = download_file(url, dest)
-        elapsed = time.time() - t0
-
-        if success:
-            downloaded_cnt += 1
-            download_duration.labels(filename=filename).set(elapsed)
-            downloaded.append({
-                "taxi_type": taxi_type,
-                "year": year,
-                "month": month,
-                "path": str(dest),
-            })
-        else:
-            failures_cnt += 1
-
-        # Add a delay to avoid rate limiting
-        time.sleep(1)
-
-    files_downloaded.set(downloaded_cnt)
-    files_skipped.set(skipped_cnt)
-    files_failed.set(failures_cnt)
-    total_duration.set(time.time() - run_start)
-    last_success_ts.set(time.time())
-    _push_metrics(registry, "etl_extract")
-
-    logger.info(
-        f"Extraction complete. {downloaded_cnt} new file(s) downloaded, {failures_cnt} failed.")
-
-    if downloaded_cnt == 0:
-        logger.warning(
-            "No files were successfully downloaded — sending no-op to avoid "
-            "triggering downstream pipeline with no new data."
-        )
-        publish({"event": "extraction_complete", "action": "no-op"})
-    else:
-        publish({
-            "event": "extraction_complete",
-            "path": RAW_DATA_DIR,
-            "action": "downloaded",
-        })
-
-
-# ── Entry point ────────────────────────────────────────────────────────────
-
+    # ── Entry point ────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     # Run immediately on startup (catches up on any missing files)
     run_extraction()
 
-    # Then schedule monthly on the 15th at 02:00 UTC
+    # Then schedule monthly using configurable cron settings
     scheduler = BlockingScheduler(timezone="UTC")
     scheduler.add_job(
         run_extraction,
-        trigger=CronTrigger(day=15, hour=2),
+        trigger=CronTrigger(day=CRON_DAY, hour=CRON_HOUR),
         name="monthly_extraction",
         misfire_grace_time=3600,
     )
     logger.info(
-        "Scheduler started — next run on the 15th of each month at 02:00 UTC.")
+        f"Scheduler started — next run on day={CRON_DAY} of each month at {CRON_HOUR}:00 UTC.")
     try:
         scheduler.start()
     except (KeyboardInterrupt, SystemExit):

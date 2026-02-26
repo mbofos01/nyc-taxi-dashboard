@@ -43,129 +43,129 @@ services:
       border-width: "3px"
       border-style: "solid"
 
-  transform:
-    build: ETL/transform
-    container_name: transform-service
-    restart: unless-stopped
-    volumes:
-      - ./ETL/transform:/app
-      - taxi_raw_data:/data/raw
-      - taxi_processed_data:/data/processed
-    command: ["python", "main.py"]
-    env_file: .env
-    environment:
-      - SPARK_MASTER_URL=spark://spark-master:7077
-    depends_on:
-      rabbitMQ:
-        condition: service_healthy
-      spark-master:
-        condition: service_healthy
-    networks:
-      - etl-network
-    x-wharfmap:
-      color: "#d89120"
-      border-color: "#aa731b"
-      border-width: "3px"
-      border-style: "solid"
+  # transform:
+  #   build: ETL/transform
+  #   container_name: transform-service
+  #   restart: unless-stopped
+  #   volumes:
+  #     - ./ETL/transform:/app
+  #     - taxi_raw_data:/data/raw
+  #     - taxi_processed_data:/data/processed
+  #   command: ["python", "main.py"]
+  #   env_file: .env
+  #   environment:
+  #     - SPARK_MASTER_URL=spark://spark-master:7077
+  #   depends_on:
+  #     rabbitMQ:
+  #       condition: service_healthy
+  #     spark-master:
+  #       condition: service_healthy
+  #   networks:
+  #     - etl-network
+  #   x-wharfmap:
+  #     color: "#d89120"
+  #     border-color: "#aa731b"
+  #     border-width: "3px"
+  #     border-style: "solid"
 
-  load:
-    build: ETL/load
-    container_name: load-service
-    restart: unless-stopped
-    volumes:
-      - ./ETL/load:/app
-      - taxi_processed_data:/data/processed
-    command: ["python", "main.py"]
-    env_file: .env
-    depends_on:
-      rabbitMQ:
-        condition: service_healthy
-      postgres:
-        condition: service_healthy
-    networks:
-      - etl-network      # receives messages from transform via rabbitmq
-      - storage-network  # writes to postgres
-    x-wharfmap:
-      color: "#20a1d8"
-      border-color: "#0e6090"
-      border-width: "3px"
-      border-style: "solid"
+  # load:
+  #   build: ETL/load
+  #   container_name: load-service
+  #   restart: unless-stopped
+  #   volumes:
+  #     - ./ETL/load:/app
+  #     - taxi_processed_data:/data/processed
+  #   command: ["python", "main.py"]
+  #   env_file: .env
+  #   depends_on:
+  #     rabbitMQ:
+  #       condition: service_healthy
+  #     postgres:
+  #       condition: service_healthy
+  #   networks:
+  #     - etl-network      # receives messages from transform via rabbitmq
+  #     - storage-network  # writes to postgres
+  #   x-wharfmap:
+  #     color: "#20a1d8"
+  #     border-color: "#0e6090"
+  #     border-width: "3px"
+  #     border-style: "solid"
 
-  # ── Model training ────────────────────────────────────────────────────────
+  # # ── Model training ────────────────────────────────────────────────────────
 
-  fare-trainer:
-    build: models/fare
-    container_name: fare-trainer
-    restart: unless-stopped
-    volumes:
-      - ./models/fare:/app
-      - taxi_processed_data:/data/processed
-      - taxi_models_data:/data/models
-    command: ["python", "main.py"]
-    env_file: .env
-    depends_on:
-      rabbitMQ:
-        condition: service_healthy
-      spark-master:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    networks:
-      - etl-network      # RabbitMQ + Spark + Pushgateway
-      - storage-network  # Redis
+  # fare-trainer:
+  #   build: models/fare
+  #   container_name: fare-trainer
+  #   restart: unless-stopped
+  #   volumes:
+  #     - ./models/fare:/app
+  #     - taxi_processed_data:/data/processed
+  #     - taxi_models_data:/data/models
+  #   command: ["python", "main.py"]
+  #   env_file: .env
+  #   depends_on:
+  #     rabbitMQ:
+  #       condition: service_healthy
+  #     spark-master:
+  #       condition: service_healthy
+  #     redis:
+  #       condition: service_healthy
+  #   networks:
+  #     - etl-network      # RabbitMQ + Spark + Pushgateway
+  #     - storage-network  # Redis
 
-  # ── Spark cluster ──────────────────────────────────────────────────────────
+  # # ── Spark cluster ──────────────────────────────────────────────────────────
 
-  spark-master:
-    image: apache/spark:3.5.1
-    container_name: spark-master
-    restart: unless-stopped
-    command: ["/opt/spark/bin/spark-class", "org.apache.spark.deploy.master.Master"]
-    environment:
-      - SPARK_NO_DAEMONIZE=true
-      - SPARK_MASTER_HOST=spark-master
-      - SPARK_LOG_LEVEL=WARN
-    ports:
-      - "8080:8080"
-      - "7077:7077"
-    networks:
-      - etl-network
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080"]
-      interval: 15s
-      timeout: 10s
-      retries: 5
-    x-wharfmap:
-      color: "#1a9b6b"
-      border-color: "#0e6648"
-      border-width: "1px"
-      border-style: "dashed"
+  # spark-master:
+  #   image: apache/spark:3.5.1
+  #   container_name: spark-master
+  #   restart: unless-stopped
+  #   command: ["/opt/spark/bin/spark-class", "org.apache.spark.deploy.master.Master"]
+  #   environment:
+  #     - SPARK_NO_DAEMONIZE=true
+  #     - SPARK_MASTER_HOST=spark-master
+  #     - SPARK_LOG_LEVEL=WARN
+  #   ports:
+  #     - "8080:8080"
+  #     - "7077:7077"
+  #   networks:
+  #     - etl-network
+  #   healthcheck:
+  #     test: ["CMD", "curl", "-f", "http://localhost:8080"]
+  #     interval: 15s
+  #     timeout: 10s
+  #     retries: 5
+  #   x-wharfmap:
+  #     color: "#1a9b6b"
+  #     border-color: "#0e6648"
+  #     border-width: "1px"
+  #     border-style: "dashed"
 
-  spark-worker:
-    image: apache/spark:3.5.1
-    user: root
-    restart: unless-stopped
-    command: ["/opt/spark/bin/spark-class", "org.apache.spark.deploy.worker.Worker", "spark://spark-master:7077"]
-    environment:
-      - SPARK_NO_DAEMONIZE=true
-      - SPARK_WORKER_MEMORY=4g
-      - SPARK_WORKER_CORES=2
-      - PYSPARK_PYTHON=python3
-      - SPARK_LOG_LEVEL=WARN
-    volumes:
-      - taxi_raw_data:/data/raw
-      - taxi_processed_data:/data/processed
-      - taxi_models_data:/data/models
-    depends_on:
-      spark-master:
-        condition: service_healthy
-    networks:
-      - etl-network
-    x-wharfmap:
-      color: "#1a9b6b"
-      border-color: "#0e6648"
-      border-width: "1px"
-      border-style: "dashed"
+  # spark-worker:
+  #   image: apache/spark:3.5.1
+  #   user: root
+  #   restart: unless-stopped
+  #   command: ["/opt/spark/bin/spark-class", "org.apache.spark.deploy.worker.Worker", "spark://spark-master:7077"]
+  #   environment:
+  #     - SPARK_NO_DAEMONIZE=true
+  #     - SPARK_WORKER_MEMORY=4g
+  #     - SPARK_WORKER_CORES=2
+  #     - PYSPARK_PYTHON=python3
+  #     - SPARK_LOG_LEVEL=WARN
+  #   volumes:
+  #     - taxi_raw_data:/data/raw
+  #     - taxi_processed_data:/data/processed
+  #     - taxi_models_data:/data/models
+  #   depends_on:
+  #     spark-master:
+  #       condition: service_healthy
+  #   networks:
+  #     - etl-network
+  #   x-wharfmap:
+  #     color: "#1a9b6b"
+  #     border-color: "#0e6648"
+  #     border-width: "1px"
+  #     border-style: "dashed"
 
   # ── Message broker ────────────────────────────────────────────────────────
 
@@ -196,56 +196,56 @@ services:
       border-width: "1px"
       border-style: "dashed"
 
-  # ── Data stores ───────────────────────────────────────────────────────────
+  # # ── Data stores ───────────────────────────────────────────────────────────
 
-  postgres:
-    image: postgres:16-alpine
-    container_name: postgres-service
-    restart: unless-stopped
-    env_file: .env
-    environment:
-      - POSTGRES_DB=${POSTGRES_DB:-nyc_taxi}
-      - POSTGRES_USER=${POSTGRES_USER:-nyc}
-      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-nyc}
-    command: ["postgres", "-c", "logging_collector=off", "-c", "log_statement=none", "-c", "log_min_messages=fatal"]
-    ports:
-      - "5432:5432"
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-    networks:
-      - storage-network
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-nyc} -d ${POSTGRES_DB:-nyc_taxi}"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-    x-wharfmap:
-      color: "#336791"
-      border-color: "#1e3f5a"
-      border-width: "1px"
-      border-style: "dashed"
+  # postgres:
+  #   image: postgres:16-alpine
+  #   container_name: postgres-service
+  #   restart: unless-stopped
+  #   env_file: .env
+  #   environment:
+  #     - POSTGRES_DB=${POSTGRES_DB:-nyc_taxi}
+  #     - POSTGRES_USER=${POSTGRES_USER:-nyc}
+  #     - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-nyc}
+  #   command: ["postgres", "-c", "logging_collector=off", "-c", "log_statement=none", "-c", "log_min_messages=fatal"]
+  #   ports:
+  #     - "5432:5432"
+  #   volumes:
+  #     - postgres_data:/var/lib/postgresql/data
+  #   networks:
+  #     - storage-network
+  #   healthcheck:
+  #     test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-nyc} -d ${POSTGRES_DB:-nyc_taxi}"]
+  #     interval: 10s
+  #     timeout: 5s
+  #     retries: 5
+  #   x-wharfmap:
+  #     color: "#336791"
+  #     border-color: "#1e3f5a"
+  #     border-width: "1px"
+  #     border-style: "dashed"
 
-  redis:
-    image: redis:7-alpine
-    container_name: redis-service
-    restart: unless-stopped
-    command: ["redis-server", "--loglevel", "warning"]
-    ports:
-      - "6379:6379"
-    volumes:
-      - redis_data:/data
-    networks:
-      - storage-network
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-    x-wharfmap:
-      color: "#d82c20"
-      border-color: "#7a0c00"
-      border-width: "1px"
-      border-style: "dashed"
+  # redis:
+  #   image: redis:7-alpine
+  #   container_name: redis-service
+  #   restart: unless-stopped
+  #   command: ["redis-server", "--loglevel", "warning"]
+  #   ports:
+  #     - "6379:6379"
+  #   volumes:
+  #     - redis_data:/data
+  #   networks:
+  #     - storage-network
+  #   healthcheck:
+  #     test: ["CMD", "redis-cli", "ping"]
+  #     interval: 10s
+  #     timeout: 5s
+  #     retries: 5
+  #   x-wharfmap:
+  #     color: "#d82c20"
+  #     border-color: "#7a0c00"
+  #     border-width: "1px"
+  #     border-style: "dashed"
 
   # ── Observability stack ────────────────────────────────────────────────────
 
