@@ -60,6 +60,28 @@ services:
       border-color: "#aa731b"
       border-width: "3px"
       border-style: "solid"
+
+  load:
+    build: ETL/load
+    container_name: load-service
+    restart: unless-stopped
+    volumes:
+      - ./ETL/load:/app
+      - taxi_raw_data:/data/raw
+      - taxi_processed_data:/data/processed
+    command: ["python", "main.py"]
+    env_file: .env
+    depends_on:
+      rabbitMQ:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    networks:
+      - etl-network
+    x-wharfmap:
+      color: "#20a1d8"
+      border-color: "#0e6090"
+      border-width: "3px"
       border-style: "solid"
 
   # ── Spark cluster ──────────────────────────────────────────────────────────
@@ -137,6 +159,57 @@ services:
       border-width: "1px"      
       border-style: "dashed"
 
+  # ── Data stores ───────────────────────────────────────────────────────────
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: postgres-service
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      - POSTGRES_DB=${POSTGRES_DB:-nyc_taxi}
+      - POSTGRES_USER=${POSTGRES_USER:-nyc}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-nyc}
+    command: [ "postgres", "-c", "logging_collector=off", "-c", "log_statement=none", "-c", "log_min_messages=fatal" ]
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - etl-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-nyc} -d ${POSTGRES_DB:-nyc_taxi}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    x-wharfmap:
+      color: "#336791"
+      border-color: "#1e3f5a"
+      border-width: "1px"
+      border-style: "dashed"
+
+  redis:
+    image: redis:7-alpine
+    container_name: redis-service
+    restart: unless-stopped
+    command: ["redis-server", "--loglevel", "warning"]
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - etl-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    x-wharfmap:
+      color: "#d82c20"
+      border-color: "#7a0c00"
+      border-width: "1px"
+      border-style: "dashed"
+
   # ── Observability stack ────────────────────────────────────────────────────
 
   # Pushgateway: ETL batch jobs push metrics here when they finish.
@@ -188,6 +261,8 @@ volumes:
   taxi_raw_data:
   taxi_processed_data:
   prometheus_data:
+  postgres_data:
+  redis_data:
 
 networks:
   etl-network:
