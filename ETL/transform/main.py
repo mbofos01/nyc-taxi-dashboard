@@ -443,7 +443,12 @@ def on_message(ch, method, properties, body) -> None:
             logger.info(
                 "No new files — skipping transform, updating Pushgateway.")
             _push_noop_metrics()
+            publish({
+                "event": "transform_skipped",
+                "action": "no-op",
+            })
             ch.basic_ack(delivery_tag=method.delivery_tag)
+
             return
 
         raw_dir = payload.get("path", RAW_DATA_DIR)
@@ -452,6 +457,7 @@ def on_message(ch, method, properties, body) -> None:
         publish({
             "event": "transform_complete",
             "path": PROCESSED_DATA_DIR,
+            "action": "load_ready",
         })
 
         ch.basic_ack(delivery_tag=method.delivery_tag)
@@ -493,7 +499,46 @@ def start_consumer() -> None:
     sys.exit(1)
 
 
+# ── Startup catch-up ──────────────────────────────────────────────────────
+
+DATASET_NAMES = ["zone_hourly", "daily_stats", "zone_time_buckets", "zone_anomaly_stats"]
+
+
+def has_unprocessed_data() -> bool:
+    """
+    Return True if raw parquet files exist for any taxi type but the
+    corresponding processed output is missing or empty for at least one
+    dataset.  Used on startup to catch up after a mid-pipeline crash.
+    """
+    for taxi_type in COLUMN_MAPS.keys():
+        raw_dir = Path(RAW_DATA_DIR) / taxi_type
+        if not raw_dir.exists() or not list(raw_dir.rglob("*.parquet")):
+            continue  # no raw data for this type
+        for dataset in DATASET_NAMES:
+            out_dir = Path(PROCESSED_DATA_DIR) / dataset / taxi_type
+            if not out_dir.exists() or not list(out_dir.rglob("*.parquet")):
+                logger.info(f"Catch-up needed: missing processed output at {out_dir}")
+                return True
+    return False
+
+
 # ── Entry point ────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
+    # Catch-up: if raw data was downloaded but transform never ran (e.g. after
+    # a container crash), run it now before entering the consumer loop.
+    if has_unprocessed_data():
+        logger.info("=== Startup catch-up: unprocessed raw data detected ===")
+        try:
+            run_transform(RAW_DATA_DIR)
+            publish({
+                "event": "transform_complete",
+                "path": PROCESSED_DATA_DIR,
+                "action": "load_ready",
+            })
+        except Exception as e:
+            logger.error(f"Startup catch-up transform failed: {e}", exc_info=True)
+    else:
+        logger.info("Startup catch-up: no unprocessed raw data found, skipping.")
+
     start_consumer()

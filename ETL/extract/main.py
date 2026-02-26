@@ -175,7 +175,7 @@ def get_expected_files() -> set[str]:
     expected = set()
     today = date.today()
     cutoff = date(today.year, today.month, 1) - relativedelta(months=3)
-    cutoff = date(2023, 4, 1)  # For testing with fixed cutoff
+    # cutoff = date(2023, 4, 1)  # For testing with fixed cutoff
 
     for taxi_type in TAXI_TYPES:
         current = START_DATE
@@ -308,12 +308,20 @@ def run_extraction() -> None:
     _push_metrics(registry, "etl_extract")
 
     logger.info(
-        f"Extraction complete. {downloaded_cnt} new file(s) downloaded.")
-    publish({
-        "event": "extraction_complete",
-        "path": RAW_DATA_DIR,
-        "action": "downloaded",
-    })
+        f"Extraction complete. {downloaded_cnt} new file(s) downloaded, {failures_cnt} failed.")
+
+    if downloaded_cnt == 0:
+        logger.warning(
+            "No files were successfully downloaded — sending no-op to avoid "
+            "triggering downstream pipeline with no new data."
+        )
+        publish({"event": "extraction_complete", "action": "no-op"})
+    else:
+        publish({
+            "event": "extraction_complete",
+            "path": RAW_DATA_DIR,
+            "action": "downloaded",
+        })
 
 
 # ── Entry point ────────────────────────────────────────────────────────────

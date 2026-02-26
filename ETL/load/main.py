@@ -81,6 +81,7 @@ def ensure_schema(conn: psycopg2.extensions.connection) -> None:
         pickup_year          INT,
         pickup_month         INT,
         pickup_date          DATE,
+        pickup_dow           INT,
         pickup_hour          INT,
         pickup_location_id   BIGINT,
         taxi_type            VARCHAR(10),
@@ -255,7 +256,7 @@ def run_load(processed_dir: str) -> None:
                 try:
                     df = read_parquet_dir(src)
                     if df is None:
-                        logger.warning(f"No data at {src}, skipping.")
+                        logger.info(f"No data at {src}, skipping.")
                         continue
 
                     n = upsert_dataframe(conn, df, table, pk_cols)
@@ -338,6 +339,7 @@ def on_message(ch, method, properties, body) -> None:
         publish_loaded({
             "event": "load_complete",
             "path": processed_dir,
+            "action": "model_update",
         })
 
         ch.basic_ack(delivery_tag=method.delivery_tag)
@@ -378,7 +380,40 @@ def start_consumer() -> None:
     sys.exit(1)
 
 
+# ── Startup catch-up ──────────────────────────────────────────────────────
+
+def has_processed_data() -> bool:
+    """
+    Return True if any processed parquet dataset is present on disk and
+    ready to be loaded into PostgreSQL.  Used on startup to catch up after
+    a mid-pipeline crash where transform finished but load did not.
+    """
+    for dataset in DATASETS:
+        for taxi_type in TAXI_TYPES:
+            src = Path(PROCESSED_DATA_DIR) / dataset / taxi_type
+            if src.exists() and list(src.rglob("*.parquet")):
+                logger.info(f"Catch-up needed: unloaded processed data at {src}")
+                return True
+    return False
+
+
 # ── Entry point ────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
+    # Catch-up: if processed data exists but load never ran (e.g. after a
+    # container crash), upsert it into PostgreSQL before entering the consumer.
+    if has_processed_data():
+        logger.info("=== Startup catch-up: unloaded processed data detected ===")
+        try:
+            run_load(PROCESSED_DATA_DIR)
+            publish_loaded({
+                "event": "load_complete",
+                "path": PROCESSED_DATA_DIR,
+                "action": "model_update",
+            })
+        except Exception as e:
+            logger.error(f"Startup catch-up load failed: {e}", exc_info=True)
+    else:
+        logger.info("Startup catch-up: no unloaded processed data found, skipping.")
+
     start_consumer()
