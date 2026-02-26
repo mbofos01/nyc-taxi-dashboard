@@ -1,0 +1,15 @@
+global:
+  scrape_interval: 15s      # How often Prometheus scrapes targets
+  evaluation_interval: 15s  # How often rules are evaluated
+
+scrape_configs:
+  # Scrape Pushgateway — this is where ETL batch jobs push their metrics
+  - job_name: "pushgateway"
+    honor_labels: true        # Keep the job label pushed by the client (etl_extract / etl_transform)
+    static_configs:
+      - targets: ["pushgateway:9091"]
+
+  # Scrape Prometheus itself (optional but useful for self-monitoring)
+  - job_name: "prometheus"
+    static_configs:
+      - targets: ["localhost:9090"]
