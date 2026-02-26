@@ -11,6 +11,7 @@ import pika
 from dateutil.relativedelta import relativedelta
 from apscheduler.schedulers.blocking import BlockingScheduler
 from apscheduler.triggers.cron import CronTrigger
+from prometheus_client import CollectorRegistry, Gauge, push_to_gateway
 
 # ── Logging ────────────────────────────────────────────────────────────────
 logging.basicConfig(
@@ -18,6 +19,7 @@ logging.basicConfig(
     format="[%(levelname)s] %(message)s",
     handlers=[logging.StreamHandler(sys.stdout)],
 )
+logging.getLogger("pika").setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 
 # ── Config ─────────────────────────────────────────────────────────────────
@@ -26,13 +28,16 @@ RAW_DATA_DIR = os.getenv("RAW_DATA_DIR", "/data/raw")
 # START_DATE = date(2019, 1, 1)
 START_DATE = date(2023, 1, 1)
 
-TAXI_TYPES = ["yellow", "green", "fhv", "fhvhv"]
+# TAXI_TYPES = ["yellow", "green", "fhv", "fhvhv"]
+TAXI_TYPES = ["yellow", "green"]
 
 RABBITMQ_HOST = os.getenv("RABBITMQ_HOST", "rabbitmq")
 RABBITMQ_PORT = int(os.getenv("RABBITMQ_PORT", 5672))
 RABBITMQ_USER = os.getenv("RABBITMQ_USER", "guest")
 RABBITMQ_PASSWORD = os.getenv("RABBITMQ_PASSWORD", "guest")
 RABBITMQ_QUEUE = os.getenv("RABBITMQ_E_QUEUE", "etl.extracted")
+
+PUSHGATEWAY_URL = os.getenv("PUSHGATEWAY_URL", "http://pushgateway:9091")
 
 # ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -151,6 +156,15 @@ def publish(payload: dict) -> None:
 
 # ── Core ETL logic ─────────────────────────────────────────────────────────
 
+def _push_metrics(registry: CollectorRegistry, job: str) -> None:
+    """Push collected metrics to Prometheus Pushgateway. Logs a warning on failure."""
+    try:
+        push_to_gateway(PUSHGATEWAY_URL, job=job, registry=registry)
+        logger.info(f"Metrics pushed to Pushgateway ({PUSHGATEWAY_URL}) for job '{job}'.")
+    except Exception as e:
+        logger.warning(f"Failed to push metrics to Pushgateway: {e}")
+
+
 def get_expected_files() -> set[str]:
     """
     This function generates a set of expected filenames for the taxi trip data Parquet files based on the defined taxi types and a date range starting from January 2019 up to two months before the current date. 
@@ -161,7 +175,7 @@ def get_expected_files() -> set[str]:
     expected = set()
     today = date.today()
     cutoff = date(today.year, today.month, 1) - relativedelta(months=3)
-    cutoff = date(2024, 12, 1)  # For testing with fixed cutoff
+    cutoff = date(2023, 4, 1)  # For testing with fixed cutoff
 
     for taxi_type in TAXI_TYPES:
         current = START_DATE
@@ -187,46 +201,114 @@ def run_extraction() -> None:
     """
     This function performs the extraction process for the taxi trip data.
     It identifies the expected files, checks for missing files, downloads them if necessary,
-    and publishes the extraction status to RabbitMQ.
+    publishes the extraction status to RabbitMQ, and pushes Prometheus metrics.
     """
+    run_start = time.time()
     logger.info("=== Starting extraction ===")
 
+    # ── Prometheus metrics ─────────────────────────────────────────────────
+    registry          = CollectorRegistry()
+    files_downloaded  = Gauge(
+        "etl_extract_files_downloaded_total",
+        "Number of files downloaded in this run",
+        registry=registry,
+    )
+    files_skipped     = Gauge(
+        "etl_extract_files_skipped_total",
+        "Number of files skipped because they were already present on disk",
+        registry=registry,
+    )
+    files_failed      = Gauge(
+        "etl_extract_files_failed_total",
+        "Number of files that failed to download",
+        registry=registry,
+    )
+    download_duration = Gauge(
+        "etl_extract_download_duration_seconds",
+        "Download duration per file in seconds",
+        ["filename"],
+        registry=registry,
+    )
+    total_duration    = Gauge(
+        "etl_extract_total_duration_seconds",
+        "Total extraction run duration in seconds",
+        registry=registry,
+    )
+    last_success_ts   = Gauge(
+        "etl_extract_last_success_timestamp",
+        "Unix timestamp of the last successful extraction run",
+        registry=registry,
+    )
+    # ──────────────────────────────────────────────────────────────────────
+
     expected = get_expected_files()
-    local = get_local_files()
-    missing = expected - local
+    local    = get_local_files()
+    missing  = expected - local
+
+    already_present = len(expected) - len(missing)  # files we can skip entirely
 
     if not missing:
         logger.info("All files already up to date — nothing to download.")
+        files_downloaded.set(0)
+        files_skipped.set(already_present)
+        files_failed.set(0)
+        total_duration.set(time.time() - run_start)
+        last_success_ts.set(time.time())
+        _push_metrics(registry, "etl_extract")
         publish({"event": "extraction_complete", "action": "no-op"})
         return
 
     logger.info(f"Found {len(missing)} new file(s) to download.")
 
-    downloaded = []
+    downloaded     = []
+    downloaded_cnt = 0
+    skipped_cnt    = already_present
+    failures_cnt   = 0
+
     for filename in sorted(missing):
         # Parse taxi_type, year, month back from filename
         # e.g. "yellow_2024-01.parquet" → yellow, 2024, 1
-        parts = filename.replace(".parquet", "").rsplit("_", 1)
+        parts     = filename.replace(".parquet", "").rsplit("_", 1)
         taxi_type = parts[0]
         year, month = map(int, parts[1].split("-"))
 
-        url = build_url(taxi_type, year, month)
+        url  = build_url(taxi_type, year, month)
         dest = dest_path(taxi_type, year, month)
 
+        # File may have appeared since we scanned (race condition) — count as skip
+        if dest.exists():
+            skipped_cnt += 1
+            time.sleep(1)
+            continue
+
+        t0      = time.time()
         success = download_file(url, dest)
+        elapsed = time.time() - t0
+
         if success:
+            downloaded_cnt += 1
+            download_duration.labels(filename=filename).set(elapsed)
             downloaded.append({
                 "taxi_type": taxi_type,
                 "year": year,
                 "month": month,
                 "path": str(dest),
             })
+        else:
+            failures_cnt += 1
 
         # Add a delay to avoid rate limiting
         time.sleep(1)
 
+    files_downloaded.set(downloaded_cnt)
+    files_skipped.set(skipped_cnt)
+    files_failed.set(failures_cnt)
+    total_duration.set(time.time() - run_start)
+    last_success_ts.set(time.time())
+    _push_metrics(registry, "etl_extract")
+
     logger.info(
-        f"Extraction complete. {len(downloaded)} new file(s) downloaded.")
+        f"Extraction complete. {downloaded_cnt} new file(s) downloaded.")
     publish({
         "event": "extraction_complete",
         "path": RAW_DATA_DIR,
