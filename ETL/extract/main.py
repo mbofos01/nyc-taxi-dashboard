@@ -28,8 +28,11 @@ logger = logging.getLogger(__name__)
 TLC_BASE_URL = os.getenv("TLC_BASE_URL")
 RAW_DATA_DIR = os.getenv("RAW_DATA_DIR")
 SERVER_TIMEOUT = int(os.getenv("SERVER_TIMEOUT", 15))  # seconds
+START_YEAR = int(os.getenv("START_YEAR", 2019))  # 2019
+START_MONTH = int(os.getenv("START_MONTH", 1))
+START_DAY = int(os.getenv("START_DAY", 1))
 # START_DATE = date(2019, 1, 1)
-START_DATE = date(2023, 1, 1)
+START_DATE = date(START_YEAR, START_MONTH, START_DAY)
 # TAXI_TYPES = ["yellow", "green", "fhv", "fhvhv"]
 TAXI_TYPES = ["yellow", "green"]
 
