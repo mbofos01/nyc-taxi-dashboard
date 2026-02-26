@@ -4,8 +4,13 @@ x-wharfmap:
   backgroundBorderWidth: 2
   networks:
     etl-network:
-      color: "#acbde5"          # Light yellow for ETL network
+      color: "#acbde5"
       border-color: "#8bb4df"
+      border-width: "2px"
+      border-style: "solid"
+    storage-network:
+      color: "#b5e5b5"
+      border-color: "#7bbf7b"
       border-width: "2px"
       border-style: "solid"
   conditions:
@@ -15,27 +20,29 @@ x-wharfmap:
 
 
 services:
+
+  # ── ETL Services ──────────────────────────────────────────────────────────
+
   extract:
     build: ETL/extract
     container_name: extract-service
     restart: unless-stopped
     volumes:
       - ./ETL/extract:/app
-      - taxi_raw_data:/data/raw      
+      - taxi_raw_data:/data/raw
     command: ["python", "main.py"]
     env_file: .env
     depends_on:
       rabbitMQ:
-        condition: service_healthy     
+        condition: service_healthy
     networks:
       - etl-network
     x-wharfmap:
       color: "#D82C20"
       border-color: "#7A0C00"
-      border-width: "3px"      
+      border-width: "3px"
       border-style: "solid"
 
-  
   transform:
     build: ETL/transform
     container_name: transform-service
@@ -67,7 +74,6 @@ services:
     restart: unless-stopped
     volumes:
       - ./ETL/load:/app
-      - taxi_raw_data:/data/raw
       - taxi_processed_data:/data/processed
     command: ["python", "main.py"]
     env_file: .env
@@ -77,7 +83,8 @@ services:
       postgres:
         condition: service_healthy
     networks:
-      - etl-network
+      - etl-network      # receives messages from transform via rabbitmq
+      - storage-network  # writes to postgres
     x-wharfmap:
       color: "#20a1d8"
       border-color: "#0e6090"
@@ -96,8 +103,8 @@ services:
       - SPARK_MASTER_HOST=spark-master
       - SPARK_LOG_LEVEL=WARN
     ports:
-      - "8080:8080"   # Spark Master Web UI
-      - "7077:7077"   # Driver connect endpoint
+      - "8080:8080"
+      - "7077:7077"
     networks:
       - etl-network
     healthcheck:
@@ -136,6 +143,8 @@ services:
       border-width: "1px"
       border-style: "dashed"
 
+  # ── Message broker ────────────────────────────────────────────────────────
+
   rabbitMQ:
     image: rabbitmq:3-management
     container_name: rabbitmq-service
@@ -151,7 +160,7 @@ services:
       - rabbitmq_data:/var/lib/rabbitmq
     networks:
       - etl-network
-    healthcheck: # Check if RabbitMQ is ready to accept connections
+    healthcheck:
       test: ["CMD", "rabbitmq-diagnostics", "status"]
       interval: 10s
       retries: 5
@@ -160,7 +169,7 @@ services:
     x-wharfmap:
       color: "#20a1d8"
       border-color: "#1b33aa"
-      border-width: "1px"      
+      border-width: "1px"
       border-style: "dashed"
 
   # ── Data stores ───────────────────────────────────────────────────────────
@@ -174,13 +183,13 @@ services:
       - POSTGRES_DB=${POSTGRES_DB:-nyc_taxi}
       - POSTGRES_USER=${POSTGRES_USER:-nyc}
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-nyc}
-    command: [ "postgres", "-c", "logging_collector=off", "-c", "log_statement=none", "-c", "log_min_messages=fatal" ]
+    command: ["postgres", "-c", "logging_collector=off", "-c", "log_statement=none", "-c", "log_min_messages=fatal"]
     ports:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     networks:
-      - etl-network
+      - storage-network
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-nyc} -d ${POSTGRES_DB:-nyc_taxi}"]
       interval: 10s
@@ -202,7 +211,7 @@ services:
     volumes:
       - redis_data:/data
     networks:
-      - etl-network
+      - storage-network
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
@@ -216,33 +225,29 @@ services:
 
   # ── Observability stack ────────────────────────────────────────────────────
 
-  # Pushgateway: ETL batch jobs push metrics here when they finish.
-  # Prometheus cannot scrape short-lived jobs directly, so this acts
-  # as a persistent intermediary that Prometheus can scrape normally.
   pushgateway:
     image: prom/pushgateway:v1.9.0
     container_name: pushgateway-service
     restart: unless-stopped
     ports:
-      - "9091:9091"     # UI + push endpoint: http://localhost:9091
+      - "9091:9091"
     command:
       - "--log.level=warn"
     networks:
-      - etl-network
+      - etl-network      # receives pushes from ETL batch jobs
+      - storage-network  # scraped by prometheus
     x-wharfmap:
       color: "#e08020"
       border-color: "#a05010"
       border-width: "1px"
       border-style: "dashed"
 
-  # Prometheus: scrapes Pushgateway (and can scrape other targets).
-  # Config is mounted from ./monitoring/prometheus.yml
   prometheus:
     image: prom/prometheus:v2.52.0
     container_name: prometheus-service
     restart: unless-stopped
     ports:
-      - "9090:9090"     # UI: http://localhost:9090
+      - "9090:9090"
     volumes:
       - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - prometheus_data:/prometheus
@@ -254,21 +259,19 @@ services:
     depends_on:
       - pushgateway
     networks:
-      - etl-network
+      - storage-network
     x-wharfmap:
       color: "#e03020"
       border-color: "#901000"
       border-width: "1px"
       border-style: "dashed"
 
-  # Grafana: queries Prometheus and renders dashboards.
-  # Credentials default to admin/admin — override via .env or env vars.
   grafana:
     image: grafana/grafana:10.4.3
     container_name: grafana-service
     restart: unless-stopped
     ports:
-      - "3000:3000"     # UI: http://localhost:3000
+      - "3000:3000"
     environment:
       - GF_SECURITY_ADMIN_USER=${GRAFANA_ADMIN_USER:-admin}
       - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-admin}
@@ -281,12 +284,37 @@ services:
     depends_on:
       - prometheus
     networks:
-      - etl-network
+      - storage-network
     x-wharfmap:
       color: "#f2a500"
       border-color: "#b07000"
       border-width: "1px"
       border-style: "dashed"
+
+  # ── API + Dashboard (planned) ─────────────────────────────────────────────
+  # api:
+  #   build: api/
+  #   container_name: api-service
+  #   depends_on:
+  #     postgres:
+  #       condition: service_healthy
+  #     redis:
+  #       condition: service_healthy
+  #   ports:
+  #     - "8000:8000"
+  #   networks:
+  #     - storage-network   # reads postgres + redis
+  #     - etl-network       # subscribes to model.trained events via rabbitmq
+
+  # dashboard:
+  #   build: dashboard/
+  #   container_name: dashboard-service
+  #   depends_on:
+  #     - api
+  #   ports:
+  #     - "8050:8050"
+  #   networks:
+  #     - storage-network
 
 volumes:
   rabbitmq_data:
@@ -299,4 +327,6 @@ volumes:
 
 networks:
   etl-network:
+    driver: bridge
+  storage-network:
     driver: bridge
