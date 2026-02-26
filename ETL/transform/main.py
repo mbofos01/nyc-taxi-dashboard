@@ -1,4 +1,5 @@
 import os
+import re
 import logging
 import sys
 import time
@@ -6,6 +7,7 @@ import json
 from pathlib import Path
 
 import pika
+from prometheus_client import CollectorRegistry, Gauge, push_to_gateway
 from pyspark.sql import SparkSession, DataFrame
 from pyspark.sql import functions as F
 
@@ -15,21 +17,33 @@ logging.basicConfig(
     format="[%(levelname)s] %(message)s",
     handlers=[logging.StreamHandler(sys.stdout)],
 )
+logging.getLogger("pika").setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 
 # ── Config ─────────────────────────────────────────────────────────────────
-RAW_DATA_DIR       = os.getenv("RAW_DATA_DIR", "/data/raw")
+RAW_DATA_DIR = os.getenv("RAW_DATA_DIR", "/data/raw")
 PROCESSED_DATA_DIR = os.getenv("PROCESSED_DATA_DIR", "/data/processed")
 
-RABBITMQ_HOST      = os.getenv("RABBITMQ_HOST", "rabbitmq")
-RABBITMQ_PORT      = int(os.getenv("RABBITMQ_PORT", 5672))
-RABBITMQ_USER      = os.getenv("RABBITMQ_USER", "guest")
-RABBITMQ_PASSWORD  = os.getenv("RABBITMQ_PASSWORD", "guest")
-RABBITMQ_IN_QUEUE  = os.getenv("RABBITMQ_E_QUEUE", "etl.extracted")    # listen
-RABBITMQ_OUT_QUEUE = os.getenv("RABBITMQ_T_QUEUE", "etl.transformed")  # publish
+RABBITMQ_HOST = os.getenv("RABBITMQ_HOST", "rabbitmq")
+RABBITMQ_PORT = int(os.getenv("RABBITMQ_PORT", 5672))
+RABBITMQ_USER = os.getenv("RABBITMQ_USER", "guest")
+RABBITMQ_PASSWORD = os.getenv("RABBITMQ_PASSWORD", "guest")
+RABBITMQ_IN_QUEUE = os.getenv("RABBITMQ_E_QUEUE", "etl.extracted")    # listen
+RABBITMQ_OUT_QUEUE = os.getenv(
+    "RABBITMQ_T_QUEUE", "etl.transformed")  # publish
+PUSHGATEWAY_URL = os.getenv("PUSHGATEWAY_URL", "http://pushgateway:9091")
+SPARK_MASTER_URL = os.getenv("SPARK_MASTER_URL", "spark://spark-master:7077")
 
 # ── Column name normalisation ──────────────────────────────────────────────
 # Each taxi type uses different column names — we map them to a unified schema
+
+# Raw pickup-datetime column per taxi type (used for per-file date validation)
+DATETIME_COLS = {
+    "yellow": "tpep_pickup_datetime",
+    "green":  "lpep_pickup_datetime",
+    "fhv":    "pickup_datetime",
+    "fhvhv":  "pickup_datetime",
+}
 
 COLUMN_MAPS = {
     "yellow": {
@@ -78,15 +92,24 @@ COLUMN_MAPS = {
 
 # ── Spark ──────────────────────────────────────────────────────────────────
 
+
 def get_spark() -> SparkSession:
-    return (
+    spark = (
         SparkSession.builder
-        .master("local[*]")
+        .master(SPARK_MASTER_URL)
         .appName("nyc-taxi-transform")
         .config("spark.sql.parquet.enableVectorizedReader", "false")
-        .config("spark.driver.memory", "4g")
+        .config("spark.driver.memory", "2g")
+        .config("spark.executor.memory", "3g")
+        # The driver runs inside the 'transform' container. Workers need to
+        # reach it by container name over the Docker bridge network.
+        .config("spark.driver.host", "transform")
+        .config("spark.driver.bindAddress", "0.0.0.0")
         .getOrCreate()
     )
+
+    spark.sparkContext.setLogLevel("WARN")
+    return spark
 
 
 # ── Transformation helpers ─────────────────────────────────────────────────
@@ -111,9 +134,18 @@ def clean(df: DataFrame) -> DataFrame:
         F.col("dropoff_location_id").isNotNull()
     )
 
+    # Secondary safety net: drop any row whose year still falls outside the
+    # expected range after per-file filtering (catches files with no date in
+    # their name and any edge-case timezone artefacts).
+    df = df.filter(
+        (F.year("pickup_datetime") >= 2019) &
+        (F.year("pickup_datetime") <= F.year(F.current_date()))
+    )
+
     df = df.withColumn(
         "trip_duration_minutes",
-        (F.unix_timestamp("dropoff_datetime") - F.unix_timestamp("pickup_datetime")) / 60.0
+        (F.unix_timestamp("dropoff_datetime") -
+         F.unix_timestamp("pickup_datetime")) / 60.0
     )
 
     df = df.filter(
@@ -160,7 +192,8 @@ def agg_zone_hourly(df: DataFrame) -> DataFrame:
     """Trip count + averages per zone per hour — feeds map & demand forecast."""
     aggs = [F.count("*").alias("trip_count")]
     if "trip_duration_minutes" in df.columns:
-        aggs.append(F.avg("trip_duration_minutes").alias("avg_duration_minutes"))
+        aggs.append(F.avg("trip_duration_minutes").alias(
+            "avg_duration_minutes"))
     if "trip_distance" in df.columns:
         aggs.append(F.avg("trip_distance").alias("avg_distance"))
     if "fare_amount" in df.columns:
@@ -178,7 +211,8 @@ def agg_daily_stats(df: DataFrame) -> DataFrame:
     """Daily summary per taxi type — feeds KPI cards."""
     aggs = [F.count("*").alias("trip_count")]
     if "trip_duration_minutes" in df.columns:
-        aggs.append(F.avg("trip_duration_minutes").alias("avg_duration_minutes"))
+        aggs.append(F.avg("trip_duration_minutes").alias(
+            "avg_duration_minutes"))
     if "passenger_count" in df.columns:
         aggs.append(F.sum("passenger_count").alias("total_passengers"))
     if "fare_amount" in df.columns:
@@ -222,9 +256,42 @@ def write_parquet(df: DataFrame, name: str) -> None:
 # ── Core transform logic ───────────────────────────────────────────────────
 
 def run_transform(raw_dir: str) -> None:
-    """Read all raw Parquet files, transform, and write aggregations."""
+    """Read all raw Parquet files, transform, write aggregations, and push Prometheus metrics."""
     logger.info("=== Starting transform ===")
     spark = get_spark()
+
+    # ── Prometheus metrics ─────────────────────────────────────────────────
+    registry = CollectorRegistry()
+    files_processed = Gauge(
+        "etl_transform_files_processed_total",
+        "Number of valid Parquet files processed per taxi type",
+        ["taxi_type"],
+        registry=registry,
+    )
+    rows_before_clean = Gauge(
+        "etl_transform_rows_before_cleaning",
+        "Row count after normalisation, before cleaning, per taxi type",
+        ["taxi_type"],
+        registry=registry,
+    )
+    rows_after_clean = Gauge(
+        "etl_transform_rows_after_cleaning",
+        "Row count after cleaning per taxi type",
+        ["taxi_type"],
+        registry=registry,
+    )
+    proc_duration = Gauge(
+        "etl_transform_processing_duration_seconds",
+        "Processing duration per taxi type in seconds",
+        ["taxi_type"],
+        registry=registry,
+    )
+    last_success_ts = Gauge(
+        "etl_transform_last_success_timestamp",
+        "Unix timestamp of the last successful transform run",
+        registry=registry,
+    )
+    # ──────────────────────────────────────────────────────────────────────
 
     for taxi_type in COLUMN_MAPS.keys():
         type_dir = Path(raw_dir) / taxi_type
@@ -233,19 +300,39 @@ def run_transform(raw_dir: str) -> None:
             continue
 
         logger.info(f"Processing {taxi_type}...")
+        type_start = time.time()
         try:
             parquet_files = [str(p) for p in type_dir.rglob("*.parquet")]
             if not parquet_files:
-                logger.warning(f"No parquet files found for {taxi_type}, skipping.")
+                logger.warning(
+                    f"No parquet files found for {taxi_type}, skipping.")
                 continue
 
-            # Read each file individually to skip corrupted ones
+            # Read each file individually to skip corrupted ones.
+            # Validate pickup timestamps against the year-month encoded in the
+            # filename (e.g. yellow_tripdata_2022-01.parquet).  A row whose
+            # pickup date doesn't match its file's month is corrupt — even if
+            # the year looks plausible.
             dfs = []
+            _dt_col = DATETIME_COLS.get(taxi_type)
             for file in parquet_files:
                 try:
                     df = spark.read.parquet(file)
+                    m = re.search(
+                        r'_(\d{4})-(\d{2})\.parquet$', Path(file).name)
+                    if m and _dt_col and _dt_col in df.columns:
+                        exp_year = int(m.group(1))
+                        exp_month = int(m.group(2))
+                        from pyspark.sql import functions as _F
+                        df = df.filter(
+                            (_F.year(_dt_col) == exp_year) &
+                            (_F.month(_dt_col) == exp_month)
+                        )
+                        logger.info(
+                            f"Read (filtered to {exp_year}-{exp_month:02d}): {file}")
+                    else:
+                        logger.info(f"Read: {file}")
                     dfs.append(df)
-                    logger.info(f"Read: {file}")
                 except Exception as e:
                     logger.warning(f"Skipping corrupted file {file}: {e}")
 
@@ -253,20 +340,47 @@ def run_transform(raw_dir: str) -> None:
                 logger.warning(f"No valid files for {taxi_type}, skipping.")
                 continue
 
+            files_processed.labels(taxi_type=taxi_type).set(len(dfs))
+
             raw_df = dfs[0]
             for df in dfs[1:]:
-                raw_df = raw_df.union(df)
+                raw_df = raw_df.unionByName(df, allowMissingColumns=True)
 
-            norm_df  = normalise(raw_df, taxi_type)
+            norm_df = normalise(raw_df, taxi_type)
+            count_before = norm_df.count()
+            rows_before_clean.labels(taxi_type=taxi_type).set(count_before)
+            logger.info(
+                f"[{taxi_type}] Rows before cleaning: {count_before:,}")
+
             clean_df = clean(norm_df)
+            count_after = clean_df.count()
+            rows_after_clean.labels(taxi_type=taxi_type).set(count_after)
+            logger.info(f"[{taxi_type}] Rows after cleaning:  {count_after:,}")
 
-            write_parquet(agg_zone_hourly(clean_df),      f"zone_hourly/{taxi_type}")
-            write_parquet(agg_daily_stats(clean_df),      f"daily_stats/{taxi_type}")
-            write_parquet(agg_zone_time_buckets(clean_df),f"zone_time_buckets/{taxi_type}")
-            write_parquet(agg_zone_anomaly_stats(clean_df),f"zone_anomaly_stats/{taxi_type}")
+            write_parquet(agg_zone_hourly(clean_df),
+                          f"zone_hourly/{taxi_type}")
+            write_parquet(agg_daily_stats(clean_df),
+                          f"daily_stats/{taxi_type}")
+            write_parquet(agg_zone_time_buckets(clean_df),
+                          f"zone_time_buckets/{taxi_type}")
+            write_parquet(agg_zone_anomaly_stats(clean_df),
+                          f"zone_anomaly_stats/{taxi_type}")
+
+            proc_duration.labels(taxi_type=taxi_type).set(
+                time.time() - type_start)
 
         except Exception as e:
             logger.error(f"Failed to process {taxi_type}: {e}", exc_info=True)
+
+    last_success_ts.set(time.time())
+
+    try:
+        push_to_gateway(PUSHGATEWAY_URL, job="etl_transform",
+                        registry=registry)
+        logger.info(
+            f"Metrics pushed to Pushgateway ({PUSHGATEWAY_URL}) for job 'etl_transform'.")
+    except Exception as e:
+        logger.warning(f"Failed to push metrics to Pushgateway: {e}")
 
     spark.stop()
     logger.info("=== Transform complete ===")
@@ -300,17 +414,37 @@ def publish(payload: dict) -> None:
     logger.error("Could not publish to RabbitMQ after 5 attempts.")
 
 
+def _push_noop_metrics() -> None:
+    """Push a heartbeat to Pushgateway when transform was skipped (no new files)."""
+    registry = CollectorRegistry()
+    last_success_ts = Gauge(
+        "etl_transform_last_success_timestamp",
+        "Unix timestamp of the last successful transform run",
+        registry=registry,
+    )
+    last_success_ts.set(time.time())
+    try:
+        push_to_gateway(PUSHGATEWAY_URL, job="etl_transform",
+                        registry=registry)
+        logger.info(
+            f"No-op heartbeat pushed to Pushgateway ({PUSHGATEWAY_URL}).")
+    except Exception as e:
+        logger.warning(f"Failed to push no-op metrics to Pushgateway: {e}")
+
+
 def on_message(ch, method, properties, body) -> None:
     """Callback triggered when a message arrives on etl.extracted."""
     try:
         payload = json.loads(body)
         logger.info(f"Received message: {payload}")
 
-        # Skip if extraction was a no-op
-        # if payload.get("action") == "no-op":
-        #     logger.info("No new files — skipping transform.")
-        #     ch.basic_ack(delivery_tag=method.delivery_tag)
-        #     return
+        # Skip full transform if extraction was a no-op, but still update Pushgateway
+        if payload.get("action") == "no-op":
+            logger.info(
+                "No new files — skipping transform, updating Pushgateway.")
+            _push_noop_metrics()
+            ch.basic_ack(delivery_tag=method.delivery_tag)
+            return
 
         raw_dir = payload.get("path", RAW_DATA_DIR)
         run_transform(raw_dir)

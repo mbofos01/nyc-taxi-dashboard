@@ -40,23 +40,79 @@ services:
     build: ETL/transform
     container_name: transform-service
     restart: unless-stopped
-    mem_limit: 6g
     volumes:
       - ./ETL/transform:/app
-      - taxi_raw_data:/data/raw      
+      - taxi_raw_data:/data/raw
       - taxi_processed_data:/data/processed
     command: ["python", "main.py"]
     env_file: .env
+    environment:
+      - SPARK_MASTER_URL=spark://spark-master:7077
     depends_on:
       rabbitMQ:
-        condition: service_healthy     
+        condition: service_healthy
+      spark-master:
+        condition: service_healthy
     networks:
       - etl-network
     x-wharfmap:
       color: "#d89120"
       border-color: "#aa731b"
-      border-width: "3px"      
+      border-width: "3px"
       border-style: "solid"
+      border-style: "solid"
+
+  # ── Spark cluster ──────────────────────────────────────────────────────────
+
+  spark-master:
+    image: apache/spark:3.5.1
+    container_name: spark-master
+    restart: unless-stopped
+    command: ["/opt/spark/bin/spark-class", "org.apache.spark.deploy.master.Master"]
+    environment:
+      - SPARK_NO_DAEMONIZE=true
+      - SPARK_MASTER_HOST=spark-master
+      - SPARK_LOG_LEVEL=WARN
+    ports:
+      - "8080:8080"   # Spark Master Web UI
+      - "7077:7077"   # Driver connect endpoint
+    networks:
+      - etl-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+    x-wharfmap:
+      color: "#1a9b6b"
+      border-color: "#0e6648"
+      border-width: "1px"
+      border-style: "dashed"
+
+  spark-worker:
+    image: apache/spark:3.5.1
+    user: root
+    restart: unless-stopped
+    command: ["/opt/spark/bin/spark-class", "org.apache.spark.deploy.worker.Worker", "spark://spark-master:7077"]
+    environment:
+      - SPARK_NO_DAEMONIZE=true
+      - SPARK_WORKER_MEMORY=4g
+      - SPARK_WORKER_CORES=2
+      - PYSPARK_PYTHON=python3
+      - SPARK_LOG_LEVEL=WARN
+    volumes:
+      - taxi_raw_data:/data/raw
+      - taxi_processed_data:/data/processed
+    depends_on:
+      spark-master:
+        condition: service_healthy
+    networks:
+      - etl-network
+    x-wharfmap:
+      color: "#1a9b6b"
+      border-color: "#0e6648"
+      border-width: "1px"
+      border-style: "dashed"
 
   rabbitMQ:
     image: rabbitmq:3-management
