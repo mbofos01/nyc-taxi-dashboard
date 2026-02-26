@@ -139,8 +139,11 @@ services:
   rabbitMQ:
     image: rabbitmq:3-management
     container_name: rabbitmq-service
+    user: rabbitmq
     restart: unless-stopped
     env_file: .env
+    environment:
+      - RABBITMQ_SERVER_ADDITIONAL_ERL_ARGS=-rabbit log [{console,[{level,warning}]}]
     ports:
       - "5672:5672"
       - "15672:15672"
@@ -148,11 +151,12 @@ services:
       - rabbitmq_data:/var/lib/rabbitmq
     networks:
       - etl-network
-    healthcheck:
-      test: ["CMD", "rabbitmq-diagnostics", "ping"]
-      interval: 15s
-      timeout: 10s
+    healthcheck: # Check if RabbitMQ is ready to accept connections
+      test: ["CMD", "rabbitmq-diagnostics", "status"]
+      interval: 10s
       retries: 5
+      start_period: 30s
+      timeout: 10s
     x-wharfmap:
       color: "#20a1d8"
       border-color: "#1b33aa"
