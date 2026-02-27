@@ -214,7 +214,7 @@ def publish(payload: dict) -> None:
                 properties=pika.BasicProperties(delivery_mode=2),
             )
             connection.close()
-            logger.info(f"Published to RabbitMQ: {payload}")
+            logger.info(f"Published to {RABBITMQ_QUEUE}: {payload}")
             return
         except Exception as e:
             logger.warning(f"RabbitMQ publish attempt {attempt}/5 failed: {e}")
