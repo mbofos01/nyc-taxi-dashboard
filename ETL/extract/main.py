@@ -27,6 +27,7 @@ logger = logging.getLogger(__name__)
 # ── Config ─────────────────────────────────────────────────────────────────
 TLC_BASE_URL = os.getenv("TLC_BASE_URL")
 RAW_DATA_DIR = os.getenv("RAW_DATA_DIR")
+LOG_DIR = os.getenv("LOG_DIR")
 SERVER_TIMEOUT = int(os.getenv("SERVER_TIMEOUT", 15))  # seconds
 START_YEAR = int(os.getenv("START_YEAR", 2019))  # 2019
 START_MONTH = int(os.getenv("START_MONTH", 1))
@@ -157,22 +158,30 @@ def _calculate_end_date():
 def _check_existing_files(start_date: date, end_date: date, taxi_types: list, raw_data_dir: str = RAW_DATA_DIR) -> tuple[list[Path], int]:
     missing_urls = []
     existing_files = 0
-    for taxi_type in taxi_types:
-        current = start_date
-        while current <= end_date:
-            expected_file = _file_path_builder(
-                taxi_type, current.year, current.month, create_full_path=True)
-            if not expected_file.exists():
-                logger.warning(f"Missing file: {expected_file}")
-                target_url = _file_path_builder(
-                    taxi_type, current.year, current.month, create_full_path=False, create_url=True)
-                target_path = _file_path_builder(
+    out = Path(LOG_DIR) / "check.log"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    
+    with out.open("w") as f:
+        f.write(f"{'===' * 20} \n")
+        f.write(f"Checking for existing files between {start_date} and {end_date} \n")
+        for taxi_type in taxi_types:
+            current = start_date
+            while current <= end_date:
+                expected_file = _file_path_builder(
                     taxi_type, current.year, current.month, create_full_path=True)
-                missing_urls.append((target_url, target_path))
-            else:
-                logger.info(f"File exists: {expected_file}")
-                existing_files += 1
-            current += relativedelta(months=1)
+                if not expected_file.exists():
+                    logger.warning(f"Missing file: {expected_file}")
+                    target_url = _file_path_builder(
+                        taxi_type, current.year, current.month, create_full_path=False, create_url=True)
+                    target_path = _file_path_builder(
+                        taxi_type, current.year, current.month, create_full_path=True)
+                    missing_urls.append((target_url, target_path))
+                else:
+                
+                    f.write(f"File exists: {expected_file} \n")
+                    existing_files += 1
+                current += relativedelta(months=1)
+        f.write(f"{'===' * 20} ")
 
     return missing_urls, existing_files
 
