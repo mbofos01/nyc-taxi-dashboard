@@ -199,6 +199,26 @@ def _calculate_end_date():
 
 
 def _check_existing_files(start_date: date, end_date: date, taxi_types: list, raw_data_dir: str = RAW_DATA_DIR) -> tuple[list[Path], int]:
+    """
+    Walk the expected date range and identify files that need downloading.
+
+    For each (taxi_type, year, month) combination between *start_date* and
+    *end_date*, the function checks whether the corresponding parquet file is
+    already on disk and passes a basic integrity check.  Files that are missing
+    or corrupt (fails the PAR1 magic-byte check) are deleted and queued for
+    re-download.  Results are written to <LOG_DIR>/check.log.
+
+    Args:
+        start_date:    First month to check (inclusive).
+        end_date:      Last month to check (inclusive).
+        taxi_types:    List of taxi-type prefixes, e.g. ``["yellow", "green"]``.
+        raw_data_dir:  Root directory for raw parquet files.
+
+    Returns:
+        A tuple of:
+        - ``missing_urls``: list of (url, local_path) pairs to download.
+        - ``existing_files``: count of files already present and valid.
+    """
     missing_urls = []
     existing_files = 0
     out = Path(LOG_DIR) / "check.log"
@@ -241,6 +261,20 @@ def _check_existing_files(start_date: date, end_date: date, taxi_types: list, ra
 
 
 def _results_summary(attempts: list[tuple[str, Path, DownloadResult]]) -> str:
+    """
+    Summarise download attempt outcomes as a human-readable string.
+
+    Counts each ``DownloadResult`` variant that appears in *attempts* and
+    returns a comma-separated string such as
+    ``"DOWNLOADED: 3, SKIPPED: 1, NOT_FOUND: 2"``.
+
+    Args:
+        attempts: List of (url, path, DownloadResult) 3-tuples from a
+                  download run.
+
+    Returns:
+        A single-line summary string of outcome counts.
+    """
     summary = {}
     for _, _, outcome in attempts:
         summary[outcome] = summary.get(outcome, 0) + 1
@@ -248,15 +282,7 @@ def _results_summary(attempts: list[tuple[str, Path, DownloadResult]]) -> str:
 
 
 def publish(payload: dict) -> None:
-    """
-    This function publishes a message to a RabbitMQ queue.
-    It establishes a connection to the RabbitMQ server using the provided credentials and connection parameters.
-    The message is published to the specified queue in JSON format.
-
-    Args:
-        payload (dict): The message payload to be published to RabbitMQ.
-
-    """
+    """Publish *payload* as a durable JSON message to the configured RabbitMQ queue, retrying up to 5 times."""
     credentials = pika.PlainCredentials(RABBITMQ_USER, RABBITMQ_PASSWORD)
     params = pika.ConnectionParameters(
         host=RABBITMQ_HOST,
@@ -287,6 +313,18 @@ def publish(payload: dict) -> None:
 
 
 def run_extraction():
+    """
+    Top-level orchestration function for the extract stage.
+
+    Workflow:
+    1. Determine which files are missing or corrupt via ``_check_existing_files``.
+    2. Download each missing file with retry logic via ``_download_file``.
+    3. Validate every downloaded file with the PAR1 magic-byte check and
+       re-queue corrupt downloads.
+    4. Push outcome metrics to Prometheus Pushgateway.
+    5. Publish a summary event to RabbitMQ so the transform stage can pick up
+       the new files.
+    """
     run_start = time.time()
     targets, existing_files = _check_existing_files(
         START_DATE, _calculate_end_date(), TAXI_TYPES)
@@ -381,7 +419,7 @@ def run_extraction():
     })
 
 
-    # ── Entry point ────────────────────────────────────────────────────────────
+# ── Entry point ────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     # Run immediately on startup (catches up on any missing files)
     run_extraction()

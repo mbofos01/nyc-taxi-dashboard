@@ -357,10 +357,15 @@ def write_parquet(df: DataFrame, name: str, merge: bool = True) -> None:
 
 def find_pending_files() -> List[Path]:
     """
+    Return the list of raw parquet files that have not yet been processed.
 
+    Scans ``RAW_DATA_DIR`` for ``*.parquet`` files and filters out any whose
+    filename is already recorded in the Redis processed-files set
+    (``{REDIS_TRACKING_ROOT}:{REDIS_PROCESSED_SET}``).  The full pending list
+    is also written to ``<LOG_DIR>/pending_files.log`` for auditing.
 
     Returns:
-        List[Path]: A list of Path objects representing the pending files.
+        List of ``Path`` objects for files that still need to be transformed.
     """
     logger.info(f"Scanning for pending files in {PROCESSED_DATA_DIR}...")
     raw_files = set(Path(RAW_DATA_DIR).glob("*.parquet"))
@@ -546,15 +551,7 @@ def process_files(file_list: List[Path]) -> None:
 
 
 def publish(payload: dict) -> None:
-    """
-    This function publishes a message to a RabbitMQ queue.
-    It establishes a connection to the RabbitMQ server using the provided credentials and connection parameters.
-    The message is published to the specified queue in JSON format.
-
-    Args:
-        payload (dict): The message payload to be published to RabbitMQ.
-
-    """
+    """Publish *payload* as a durable JSON message to the configured RabbitMQ queue, retrying up to 5 times."""
     credentials = pika.PlainCredentials(RABBITMQ_USER, RABBITMQ_PASSWORD)
     params = pika.ConnectionParameters(
         host=RABBITMQ_HOST,

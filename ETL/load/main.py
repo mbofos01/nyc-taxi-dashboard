@@ -64,6 +64,7 @@ DATASETS: dict[str, tuple[str, list[str]]] = {
 # ── PostgreSQL helpers ─────────────────────────────────────────────────────
 
 def get_pg_conn() -> psycopg2.extensions.connection:
+    """Return a new psycopg2 connection using credentials from environment variables."""
     return psycopg2.connect(
         host=POSTGRES_HOST,
         port=POSTGRES_PORT,
@@ -185,6 +186,7 @@ def read_parquet_dir(path: Path) -> pd.DataFrame | None:
 # ── Prometheus helper ──────────────────────────────────────────────────────
 
 def _push_metrics(registry: CollectorRegistry) -> None:
+    """Push *registry* metrics to Prometheus Pushgateway; logs and swallows any connection error."""
     try:
         push_to_gateway(PUSHGATEWAY_URL, job="etl_load", registry=registry)
         logger.info(f"Metrics pushed to Pushgateway ({PUSHGATEWAY_URL}) for job 'etl_load'.")
