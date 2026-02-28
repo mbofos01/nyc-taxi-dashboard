@@ -91,6 +91,24 @@ def _file_path_builder(taxi_type: str, year: int, month: int, create_full_path: 
     return f"{taxi_type}_tripdata_{year}-{month:02d}.parquet"
 
 
+def _is_valid_parquet(path: Path) -> bool:
+    """
+    Validate a parquet file by checking the PAR1 magic bytes at the
+    start and end of the file. A partially downloaded file will have a
+    valid header but a corrupt/missing tail.
+    """
+    MAGIC = b"PAR1"
+    try:
+        with open(path, "rb") as fh:
+            header = fh.read(4)
+            fh.seek(-4, 2)
+            footer = fh.read(4)
+        return header == MAGIC and footer == MAGIC
+    except Exception as e:
+        logger.warning(f"Could not validate parquet magic for {path}: {e}")
+        return False
+
+
 def _download_file(url: str, dest: Path) -> DownloadResult:
     """
     Downloads a file from the specified URL and saves it to dest.
@@ -135,6 +153,31 @@ def _download_file(url: str, dest: Path) -> DownloadResult:
                 f.write(chunk)
 
         logger.info(f"Saved: {dest.name} ({dest.stat().st_size / 1e6:.1f} MB)")
+
+        if not _is_valid_parquet(dest):
+            logger.warning(
+                f"Downloaded file is corrupt, retrying once: {dest.name}")
+            dest.unlink()
+            # ── Single retry ───────────────────────────────────────────────
+            try:
+                response2 = requests.get(url, stream=True, timeout=60)
+                response2.raise_for_status()
+                with open(dest, "wb") as f:
+                    for chunk in response2.iter_content(chunk_size=8192):
+                        f.write(chunk)
+                if not _is_valid_parquet(dest):
+                    logger.error(
+                        f"Retry also produced corrupt file, marking as failed: {dest.name}")
+                    dest.unlink()
+                    return DownloadResult.DOWNLOAD_FAILED
+                logger.info(
+                    f"Retry succeeded: {dest.name} ({dest.stat().st_size / 1e6:.1f} MB)")
+            except Exception as e:
+                logger.error(f"Retry download failed for {url}: {e}")
+                if dest.exists():
+                    dest.unlink()
+                return DownloadResult.DOWNLOAD_FAILED
+
         return DownloadResult.DOWNLOADED
 
     except Exception as e:
@@ -160,10 +203,11 @@ def _check_existing_files(start_date: date, end_date: date, taxi_types: list, ra
     existing_files = 0
     out = Path(LOG_DIR) / "check.log"
     out.parent.mkdir(parents=True, exist_ok=True)
-    
+
     with out.open("w") as f:
         f.write(f"{'===' * 20} \n")
-        f.write(f"Checking for existing files between {start_date} and {end_date} \n")
+        f.write(
+            f"Checking for existing files between {start_date} and {end_date} \n")
         for taxi_type in taxi_types:
             current = start_date
             while current <= end_date:
@@ -176,8 +220,18 @@ def _check_existing_files(start_date: date, end_date: date, taxi_types: list, ra
                     target_path = _file_path_builder(
                         taxi_type, current.year, current.month, create_full_path=True)
                     missing_urls.append((target_url, target_path))
+                elif not _is_valid_parquet(expected_file):
+                    logger.warning(
+                        f"Corrupt parquet file detected, deleting for re-download: {expected_file.name}")
+                    f.write(
+                        f"Corrupt (deleted, queued for re-download): {expected_file} \n")
+                    expected_file.unlink()
+                    target_url = _file_path_builder(
+                        taxi_type, current.year, current.month, create_full_path=False, create_url=True)
+                    target_path = _file_path_builder(
+                        taxi_type, current.year, current.month, create_full_path=True)
+                    missing_urls.append((target_url, target_path))
                 else:
-                
                     f.write(f"File exists: {expected_file} \n")
                     existing_files += 1
                 current += relativedelta(months=1)
@@ -325,6 +379,7 @@ def run_extraction():
         "summary": f"{counters[DownloadResult.DOWNLOADED]} new files downloaded",
         "new_files": counters[DownloadResult.DOWNLOADED],
     })
+
 
     # ── Entry point ────────────────────────────────────────────────────────────
 if __name__ == "__main__":
