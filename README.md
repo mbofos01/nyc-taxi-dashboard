@@ -190,6 +190,140 @@ FastAPI checks these keys before serving predictions — if a key is missing or 
 
 ---
 
+## Environment Variables
+
+All services are configured via a `.env` file in the project root. Create one by copying the template below:
+
+```dotenv
+# ── Data paths ─────────────────────────────────────────────────────────────
+RAW_DATA_DIR=/data/raw
+PROCESSED_DATA_DIR=/data/processed
+LOG_DIR=/data/logs
+
+# ── TLC Extract ────────────────────────────────────────────────────────────
+TLC_BASE_URL=https://d37ci6vzurychx.cloudfront.net/trip-data/
+SERVER_TIMEOUT=15
+START_YEAR=2019
+START_MONTH=1
+START_DAY=1
+EXTRACT_CRON_DAY=15
+EXTRACT_CRON_HOUR=2
+
+# ── Transform ──────────────────────────────────────────────────────────────
+TRANSFORM_CRON_HOUR=3
+TRANSFORM_CRON_MINUTE=0
+
+# ── RabbitMQ ───────────────────────────────────────────────────────────────
+RABBITMQ_HOST=rabbitmq
+RABBITMQ_PORT=5672
+RABBITMQ_DEFAULT_USER=guest
+RABBITMQ_DEFAULT_PASS=guest
+RABBITMQ_USER=guest
+RABBITMQ_PASSWORD=guest
+RABBITMQ_E_QUEUE=etl.extracted
+RABBITMQ_T_QUEUE=etl.transformed
+RABBITMQ_LOADED_EXCHANGE=etl.loaded
+
+# ── Redis ──────────────────────────────────────────────────────────────────
+REDIS_HOST=redis
+REDIS_PORT=6379
+REDIS_TRACKING_ROOT=transform
+REDIS_PROCESSED_SET=processed_files
+
+# ── PostgreSQL ─────────────────────────────────────────────────────────────
+POSTGRES_HOST=postgres
+POSTGRES_PORT=5432
+POSTGRES_DB=nyc_taxi
+POSTGRES_USER=nyc
+POSTGRES_PASSWORD=nyc
+
+# ── Grafana ────────────────────────────────────────────────────────────────
+GRAFANA_ADMIN_USER=admin
+GRAFANA_ADMIN_PASSWORD=admin
+
+# ── Observability ──────────────────────────────────────────────────────────
+PUSHGATEWAY_URL=http://pushgateway:9091
+```
+
+### Field Reference
+
+#### Data Paths
+
+| Variable | Default | Description |
+|---|---|---|
+| `RAW_DATA_DIR` | `/data/raw` | Mount path for raw Parquet files downloaded by Extract |
+| `PROCESSED_DATA_DIR` | `/data/processed` | Mount path for aggregated Parquet outputs written by Transform |
+| `LOG_DIR` | `/data/logs` | Mount path for service log files (Extract, Transform) |
+
+#### Extract
+
+| Variable | Default | Description |
+|---|---|---|
+| `TLC_BASE_URL` | *(required)* | Base CDN URL for TLC Parquet files |
+| `SERVER_TIMEOUT` | `15` | HTTP request timeout in seconds when downloading from TLC |
+| `START_YEAR` | `2019` | First year to include in the download window |
+| `START_MONTH` | `1` | First month to include in the download window |
+| `START_DAY` | `1` | First day to include in the download window |
+| `EXTRACT_CRON_DAY` | `15` | Day of the month the monthly refresh cron runs |
+| `EXTRACT_CRON_HOUR` | `2` | UTC hour the monthly refresh cron runs |
+
+#### Transform
+
+| Variable | Default | Description |
+|---|---|---|
+| `TRANSFORM_CRON_HOUR` | *(required)* | UTC hour the daily catch-up cron runs |
+| `TRANSFORM_CRON_MINUTE` | *(required)* | Minute past the hour the daily catch-up cron runs |
+
+#### RabbitMQ
+
+| Variable | Default | Description |
+|---|---|---|
+| `RABBITMQ_HOST` | `rabbitmq` | Hostname of the RabbitMQ service |
+| `RABBITMQ_PORT` | `5672` | AMQP port |
+| `RABBITMQ_DEFAULT_USER` | `guest` | Default admin user created by the RabbitMQ container on first boot |
+| `RABBITMQ_DEFAULT_PASS` | `guest` | Password for the default admin user |
+| `RABBITMQ_USER` | `guest` | Username used by client services (Extract, Transform, Load, Models) |
+| `RABBITMQ_PASSWORD` | `guest` | Password used by client services |
+| `RABBITMQ_E_QUEUE` | `etl.extracted` | Queue name for Extract → Transform messages |
+| `RABBITMQ_T_QUEUE` | `etl.transformed` | Queue name for Transform → Load messages |
+| `RABBITMQ_LOADED_EXCHANGE` | `etl.loaded` | Fanout exchange name for Load → Model services broadcast |
+
+> `RABBITMQ_DEFAULT_USER` / `RABBITMQ_DEFAULT_PASS` are consumed by the RabbitMQ image to create the broker's admin account. `RABBITMQ_USER` / `RABBITMQ_PASSWORD` are the credentials the Python client services use to connect — set all four to the same values unless you need separate accounts.
+
+#### Redis
+
+| Variable | Default | Description |
+|---|---|---|
+| `REDIS_HOST` | `redis` | Hostname of the Redis service |
+| `REDIS_PORT` | `6379` | Redis port |
+| `REDIS_TRACKING_ROOT` | `transform` | Key namespace prefix used by Transform for crash-safe state tracking |
+| `REDIS_PROCESSED_SET` | `processed_files` | Redis set name that records which files have been fully processed |
+
+#### PostgreSQL
+
+| Variable | Default | Description |
+|---|---|---|
+| `POSTGRES_HOST` | `postgres` | Hostname of the PostgreSQL service |
+| `POSTGRES_PORT` | `5432` | PostgreSQL port |
+| `POSTGRES_DB` | `nyc_taxi` | Database name |
+| `POSTGRES_USER` | `nyc` | Database user |
+| `POSTGRES_PASSWORD` | `nyc` | Database password |
+
+#### Grafana
+
+| Variable | Default | Description |
+|---|---|---|
+| `GRAFANA_ADMIN_USER` | `admin` | Grafana admin username |
+| `GRAFANA_ADMIN_PASSWORD` | `admin` | Grafana admin password |
+
+#### Observability
+
+| Variable | Default | Description |
+|---|---|---|
+| `PUSHGATEWAY_URL` | `http://pushgateway:9091` | Full URL of the Prometheus Pushgateway; used by all ETL and model services to push batch metrics |
+
+---
+
 ## Getting Started
 
 ```bash
