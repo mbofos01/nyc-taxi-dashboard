@@ -9,13 +9,14 @@ An AI-powered analytics dashboard built on NYC TLC taxi data (2019–present), f
 | Layer        | Technology                        |
 |--------------|-----------------------------------|
 | Ingestion    | Python + Requests                 |
-| Processing   | PySpark (local mode)              |
+| Processing   | PySpark (standalone cluster)      |
 | ML           | Spark MLlib                       |
 | Broker       | RabbitMQ                          |
-| Cache        | Redis                             |
+| Cache / State| Redis                             |
 | Database     | PostgreSQL                        |
-| Backend      | FastAPI                           |
-| Frontend     | Plotly Dash                       |
+| Monitoring   | Prometheus + Grafana + Pushgateway|
+| Backend      | FastAPI *(planned)*               |
+| Frontend     | Plotly Dash *(planned)*           |
 | Infra        | Docker Compose                    |
 
 ---
@@ -43,11 +44,21 @@ Source: `https://d37ci6vzurychx.cloudfront.net/trip-data/`
 | --- | --- | --- | --- |
 | `etl.extracted` | queue | Extract | Transform |
 | `etl.transformed` | queue | Transform | Load |
-| `etl.loaded` | fanout exchange | Load | All 4 model services |
+| `etl.loaded` | fanout exchange | Load | All model services |
 
 ### Redis Usage
 
-Each model service writes its status to Redis upon completing training:
+Transform tracks processed files and output state to enable crash-safe incremental writes:
+
+```bash
+# Set of filenames already transformed (prevents reprocessing on restart)
+{REDIS_TRACKING_ROOT}:{REDIS_PROCESSED_SET}   → SADD / SISMEMBER
+
+# Dirty flag per taxi type ("0" = in-progress, "1" = last run completed cleanly)
+{REDIS_TRACKING_ROOT}:{taxi_type}             → SET / GET
+```
+
+Model services write their training status to Redis:
 
 ```bash
 model:fare:status     = "ready"
@@ -61,12 +72,12 @@ FastAPI checks these keys before serving predictions — if a key is missing or 
 ### Data Volumes
 
 ```bash
-/data/raw/{taxi_type}/{year}/*.parquet        ← Extract writes here
-/data/processed/zone_hourly/{taxi_type}/      ← Transform writes here
+/data/raw/{taxi_type}_tripdata_{year}-{month}.parquet   ← Extract writes here
+/data/processed/zone_hourly/{taxi_type}/                ← Transform writes here
 /data/processed/daily_stats/{taxi_type}/
 /data/processed/zone_time_buckets/{taxi_type}/
 /data/processed/zone_anomaly_stats/{taxi_type}/
-/data/models/fare/                            ← Model services write here
+/data/models/fare/                                      ← Model services write here
 /data/models/demand/
 /data/models/tip/
 /data/models/anomaly/
@@ -78,54 +89,53 @@ FastAPI checks these keys before serving predictions — if a key is missing or 
 
 ### ✅ Extract (`ETL/extract/`)
 
-- Downloads raw Parquet files from TLC CDN
-- Skips already-downloaded files (diff against local disk)
-- Runs on startup then schedules monthly refresh on the 15th at 02:00 UTC
-- Publishes `{ event, path, action }` to `etl.extracted`
-
-**Known improvements:**
-
-- Cutoff should be 3 months back to avoid 403s on unpublished data
-- `START_DATE` currently set to 2025 for testing — change back to 2019 for production
+- Downloads raw Parquet files from TLC CDN for Yellow and Green taxi types
+- Validates each file's Parquet magic bytes (`PAR1`) after download; retries once on corruption, marks as `DOWNLOAD_FAILED` if retry also corrupt
+- On startup: scans existing files, deletes and requeues any corrupt ones, then downloads all missing files
+- Runs on startup then schedules a monthly refresh (configurable via `EXTRACT_CRON_DAY` / `EXTRACT_CRON_HOUR`, defaults to day 15 at 02:00 UTC)
+- End date automatically set to 3 months ago to avoid 403s on unreleased data
+- Publishes `{ event, timestamp, new_files, summary }` to `etl.extracted`
+- Pushes Prometheus metrics to Pushgateway (`job=etl_extract`)
 
 ---
 
 ### ✅ Transform (`ETL/transform/`)
 
-- Listens on `etl.extracted` queue
-- Skips processing if `action: no-op`
+- Consumes messages from `etl.extracted` queue
+- Scans for any pending files not yet in Redis tracking set (catch-up on restart or missed messages)
+- Validates Parquet magic bytes before passing files to Spark; skips corrupt files
 - Normalises column names across all 4 taxi types to a unified schema
-- Cleans data (filters bad rows, durations, fares)
-- Engineers time features (hour, day of week, month, time bucket, is_weekend)
-- Produces 4 aggregated Parquet datasets:
+- Cleans data: null guards, year range (2019–present), trip duration (0–300 min), distance (<200 mi), fare (<$1000)
+- Engineers time features: hour, day of week, month, time bucket (morning/afternoon/evening/night), is_weekend
+- Produces 4 aggregated Parquet datasets per taxi type:
   - `zone_hourly` — trip count + averages per zone per hour (feeds map + demand forecast)
   - `daily_stats` — daily summary per taxi type (feeds KPI cards)
   - `zone_time_buckets` — trip count per zone per time of day (feeds clustering)
   - `zone_anomaly_stats` — mean + stddev per zone (feeds anomaly detection)
-- Publishes `{ event, path }` to `etl.transformed`
-
-**Known improvements:**
-
-- Should process only new files (passed via RabbitMQ message) rather than reprocessing everything
-- Should write partitioned output per month to enable incremental loading
+- **Crash-safe incremental writes**: reads dirty flag from Redis before marking dirty; merges new data with existing output if previous run completed cleanly; overwrites on detected crash; uses write-to-tmp-then-rename to avoid read/write conflict on same directory
+- **Redis file tracking**: marks each file as processed after all 4 writes succeed; skips already-processed files on subsequent runs
+- Runs a daily cron (configurable via `TRANSFORM_CRON_HOUR` / `TRANSFORM_CRON_MINUTE`) to catch any pending files
+- Pushes Prometheus metrics to Pushgateway (`job=etl_transform`): files processed, corrupt files, rows before/after cleaning, processing duration per taxi type
 
 ---
 
-### 🔲 Load (`ETL/load/`)
+### ✅ Load (`ETL/load/`)
 
-- Listens on `etl.transformed` queue
-- Reads aggregated Parquet files from `/data/processed`
-- Writes to PostgreSQL
+- Consumes messages from `etl.transformed` queue
+- Reads aggregated Parquet files from `/data/processed`; auto-discovers taxi type subdirectories (no hardcoded list)
+- Upserts all 4 datasets into PostgreSQL using `ON CONFLICT DO UPDATE`
 - Publishes to `etl.loaded` fanout exchange to trigger all model services
+- Pushes Prometheus metrics to Pushgateway (`job=etl_load`)
 
 ---
 
-### 🔲 FarePrediction (`models/fare/`)
+### ✅ FarePrediction (`models/fare/`)
 
 - Subscribes to `etl.loaded` fanout exchange
-- Trains GBTRegressor on: pickup zone, dropoff zone, time of day, day of week
+- Trains LinearRegression on `zone_hourly` aggregated data (predicts `avg_fare` per zone/hour); features: pickup zone, hour, day of week, month, taxi type
 - Saves model artifact to `/data/models/fare/`
 - Sets `model:fare:status = "ready"` in Redis
+- Pushes Prometheus metrics to Pushgateway (`job=model_fare`)
 
 ---
 
@@ -194,13 +204,19 @@ docker exec transform-service find /data/processed -name "*.parquet"
 
 # RabbitMQ management UI
 open http://localhost:15672   # guest / guest
+
+# Grafana dashboards
+open http://localhost:3000    # admin / admin
+
+# Spark master UI
+open http://localhost:8080
 ```
 
 ---
 
 ## Known Issues & Planned Improvements
 
-- [ ] Transform: process only new files, not full reprocess every run
-- [ ] Transform: partition output by month for incremental loading
-- [ ] Extract: cutoff should be 3 months back (currently causes 403s on latest 2 months)
-- [ ] Extract: revert `START_DATE` to 2019 for production
+- [ ] Extract: `START_DATE` should be set to 2019 via `.env` for full production data
+- [ ] Extract: FHV and FHVHV types commented out pending schema validation
+- [ ] Models: demand, tip, and anomaly services not yet implemented
+- [ ] API + Dashboard: not yet implemented
