@@ -65,8 +65,6 @@ services:
     depends_on:
       rabbitMQ:
         condition: service_healthy
-      transform:
-        condition: service_started
     networks:
       - etl-network
     x-wharfmap:
@@ -89,6 +87,8 @@ services:
       - SPARK_MASTER_URL=spark://spark-master:7077
     depends_on:
       rabbitMQ:
+        condition: service_healthy
+      redis:
         condition: service_healthy
       # spark-master:
       #   condition: service_healthy
@@ -113,6 +113,8 @@ services:
       rabbitMQ:
         condition: service_healthy
       postgres:
+        condition: service_healthy
+      redis:
         condition: service_healthy
     networks:
       - etl-network      # receives messages from transform via rabbitmq
@@ -313,8 +315,6 @@ services:
       - "--storage.tsdb.path=/prometheus"
       - "--storage.tsdb.retention.time=30d"
       - "--log.level=warn"
-    depends_on:
-      - pushgateway
     networks:
       - storage-network
     x-wharfmap:
@@ -338,9 +338,6 @@ services:
     volumes:
       - grafana_data:/var/lib/grafana
       - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
-    depends_on:
-      prometheus:
-        condition: service_started
     networks:
       - storage-network
     x-wharfmap:
