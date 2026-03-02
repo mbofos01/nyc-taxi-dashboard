@@ -23,6 +23,15 @@ jobs:
       - name: Run ruff
         run: ruff check ETL/ models/ --select E,F --ignore E501
 
+  validate-compose:
+    name: Validate docker-compose.yml
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate docker-compose.yml
+        run: docker compose config --quiet
+
   build:
     name: Build ${{ matrix.service }}
     runs-on: ubuntu-latest
