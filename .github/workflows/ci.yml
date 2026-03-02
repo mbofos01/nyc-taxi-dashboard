@@ -49,20 +49,11 @@ jobs:
 
       - name: Substitute env placeholders and validate
         run: |
-          # Substitute all ${VAR} placeholders with dummy values so nginx -t
-          # sees a syntactically valid config without real secrets.
-          sudo apt-get install -y --no-install-recommends gettext-base > /dev/null
-          env \
-            ETL_API_HOST=etl-api ETL_API_PORT=8000 \
-            SPARK_MASTER_HOST=spark-master SPARK_MASTER_UI_PORT=8080 \
-            GRAFANA_HOST=grafana GRAFANA_PORT=3000 \
-            PROMETHEUS_HOST=prometheus PROMETHEUS_PORT=9090 \
-            PUSHGATEWAY_HOST=pushgateway PUSHGATEWAY_PORT=9091 \
-            RABBITMQ_MGMT_HOST=rabbitmq RABBITMQ_MGMT_PORT=15672 \
-            NGINX_HOST=localhost \
-            envsubst < nginx/nginx.conf > /tmp/default.conf
+          # Use the .env file to provide environment variables for envsubst,
+          # ensuring the config is valid with real service names/ports.
           docker run --rm \
-            -v /tmp/default.conf:/etc/nginx/conf.d/default.conf:ro \
+            -v ${{ github.workspace }}/nginx/nginx.conf:/etc/nginx/templates/default.conf.template:ro \
+            --env-file .env \
             nginx:1.27-alpine nginx -t
 
   build:
