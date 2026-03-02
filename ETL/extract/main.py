@@ -4,6 +4,7 @@ import logging
 import sys
 import time
 import json
+import threading
 from datetime import date, datetime, timezone
 from enum import Enum, auto
 from pathlib import Path
@@ -42,6 +43,7 @@ RABBITMQ_PORT = int(os.getenv("RABBITMQ_PORT"))
 RABBITMQ_USER = os.getenv("RABBITMQ_USER")
 RABBITMQ_PASSWORD = os.getenv("RABBITMQ_PASSWORD")
 RABBITMQ_QUEUE = os.getenv("RABBITMQ_E_QUEUE")
+RABBITMQ_CMD_QUEUE = os.getenv("RABBITMQ_CMD_EXTRACT", "etl.cmd.extract")
 PUSHGATEWAY_URL = os.getenv("PUSHGATEWAY_URL")
 
 CRON_DAY = os.getenv("EXTRACT_CRON_DAY",  "15")   # day-of-month to run
@@ -414,9 +416,49 @@ def run_extraction():
     publish({
         "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC"),
         "event": "extraction_completed",
+        "triggered_by": "Extract stage",
         "summary": f"{counters[DownloadResult.DOWNLOADED]} new files downloaded",
-        "new_files": counters[DownloadResult.DOWNLOADED],
     })
+
+
+# ── API command consumer ──────────────────────────────────────────────────
+
+def start_cmd_consumer() -> None:
+    """Listen on the API command queue and run extraction on demand."""
+    credentials = pika.PlainCredentials(RABBITMQ_USER, RABBITMQ_PASSWORD)
+    params = pika.ConnectionParameters(
+        host=RABBITMQ_HOST, port=RABBITMQ_PORT, credentials=credentials, heartbeat=600,
+    )
+    for attempt in range(1, 11):
+        try:
+            connection = pika.BlockingConnection(params)
+            channel = connection.channel()
+            channel.queue_declare(queue=RABBITMQ_CMD_QUEUE, durable=True)
+            channel.basic_qos(prefetch_count=1)
+
+            def on_cmd(ch, method, properties, body):
+                try:
+                    payload = json.loads(body)
+                    logger.info(f"[CMD] Received command: {payload}")
+                    run_extraction()
+                    ch.basic_ack(delivery_tag=method.delivery_tag)
+                except Exception as e:
+                    logger.error(f"[CMD] Error: {e}", exc_info=True)
+                    ch.basic_nack(
+                        delivery_tag=method.delivery_tag, requeue=False)
+
+            channel.basic_consume(queue=RABBITMQ_CMD_QUEUE,
+                                  on_message_callback=on_cmd)
+            logger.info(
+                f"[CMD] Listening for commands on '{RABBITMQ_CMD_QUEUE}'")
+            channel.start_consuming()
+            return
+        except Exception as e:
+            logger.warning(
+                f"[CMD] Connection attempt {attempt}/10 failed: {e}")
+            time.sleep(10)
+    logger.error(
+        "[CMD] Could not connect to RabbitMQ for command queue after 10 attempts.")
 
 
 # ── Entry point ────────────────────────────────────────────────────────────
@@ -424,7 +466,12 @@ if __name__ == "__main__":
     # Run immediately on startup (catches up on any missing files)
     run_extraction()
 
-    # Then schedule monthly using configurable cron settings
+    # API command consumer runs in a daemon thread
+    cmd_thread = threading.Thread(
+        target=start_cmd_consumer, daemon=True, name="cmd-consumer")
+    cmd_thread.start()
+
+    # Monthly cron owns the main thread
     scheduler = BlockingScheduler(timezone="UTC")
     scheduler.add_job(
         run_extraction,
