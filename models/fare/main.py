@@ -1,3 +1,4 @@
+from math import log
 import os
 import logging
 import sys
@@ -25,25 +26,27 @@ logging.getLogger("pika").setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 
 # ── Config ─────────────────────────────────────────────────────────────────
-PROCESSED_DATA_DIR = os.getenv("PROCESSED_DATA_DIR", "/data/processed")
-MODELS_DIR         = os.getenv("MODELS_DIR", "/data/models")
+PROCESSED_DATA_DIR = os.getenv("PROCESSED_DATA_DIR")
+MODELS_DIR         = os.getenv("MODELS_DIR")
 
-RABBITMQ_HOST      = os.getenv("RABBITMQ_HOST", "rabbitmq")
-RABBITMQ_PORT      = int(os.getenv("RABBITMQ_PORT", 5672))
-RABBITMQ_USER      = os.getenv("RABBITMQ_USER", "guest")
-RABBITMQ_PASSWORD  = os.getenv("RABBITMQ_PASSWORD", "guest")
-RABBITMQ_EXCHANGE  = os.getenv("RABBITMQ_LOADED_EXCHANGE", "etl.loaded")
+RABBITMQ_HOST      = os.getenv("RABBITMQ_HOST")
+RABBITMQ_PORT      = int(os.getenv("RABBITMQ_PORT"))
+RABBITMQ_USER      = os.getenv("RABBITMQ_USER")
+RABBITMQ_PASSWORD  = os.getenv("RABBITMQ_PASSWORD")
+RABBITMQ_EXCHANGE  = os.getenv("RABBITMQ_L_EXCHANGE")
 RABBITMQ_QUEUE     = "model.fare.train"  # unique queue bound to the fanout
 
-REDIS_HOST         = os.getenv("REDIS_HOST", "redis")
-REDIS_PORT         = int(os.getenv("REDIS_PORT", 6379))
-REDIS_KEY          = "model:fare:status"
+REDIS_HOST         = os.getenv("REDIS_HOST")
+REDIS_PORT         = int(os.getenv("REDIS_PORT"))
+REDIS_MODEL_ROOT     = os.getenv("REDIS_MODEL_ROOT")
+REDIS_FARE_MODEL_KEY = os.getenv("REDIS_FARE_MODEL_KEY")
+REDIS_KEY          = f"{REDIS_MODEL_ROOT}:{REDIS_FARE_MODEL_KEY}:status"
 
-PUSHGATEWAY_URL    = os.getenv("PUSHGATEWAY_URL", "http://pushgateway:9091")
-SPARK_MASTER_URL   = os.getenv("SPARK_MASTER_URL", "spark://spark-master:7077")
+PUSHGATEWAY_URL    = os.getenv("PUSHGATEWAY_URL")
+SPARK_MASTER_URL   = os.getenv("SPARK_MASTER_URL")
 
 # Taxi types that have fare data
-FARE_TAXI_TYPES    = ["yellow", "green", "fhvhv"]
+FARE_TAXI_TYPES    = ["yellow", "green"] # add "fhvhv" later
 
 # ── Spark ──────────────────────────────────────────────────────────────────
 
@@ -240,7 +243,11 @@ def on_message(ch, method, properties, body) -> None:
     try:
         payload = json.loads(body)
         logger.info(f"Received message: {payload}")
-        run_training()
+        _timestamp_ = payload.get("timestamp", "N/A")
+        _event_ = payload.get("event", "N/A")
+        
+        logger.info(f" ({_timestamp_}) - Processing event: {_event_} ...")
+        # run_training()
         ch.basic_ack(delivery_tag=method.delivery_tag)
     except Exception as e:
         logger.error(f"Error processing message: {e}", exc_info=True)
