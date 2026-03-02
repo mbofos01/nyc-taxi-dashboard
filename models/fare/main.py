@@ -1,4 +1,3 @@
-from math import log
 import os
 import logging
 import sys
