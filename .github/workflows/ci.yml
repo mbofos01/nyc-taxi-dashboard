@@ -20,8 +20,8 @@ jobs:
       - name: Install ruff
         run: pip install ruff
 
-      - name: Run ruff
-        run: ruff check ETL/ models/ --select E,F --ignore E501
+      - name: Check formatting
+        run: ruff format ETL/ models/ --check
 
   validate-compose:
     name: Validate docker-compose.yml

@@ -26,33 +26,33 @@ logger = logging.getLogger(__name__)
 
 # ── Config ─────────────────────────────────────────────────────────────────
 PROCESSED_DATA_DIR = os.getenv("PROCESSED_DATA_DIR")
-MODELS_DIR         = os.getenv("MODELS_DIR")
+MODELS_DIR = os.getenv("MODELS_DIR")
 
-RABBITMQ_HOST      = os.getenv("RABBITMQ_HOST")
-RABBITMQ_PORT      = int(os.getenv("RABBITMQ_PORT"))
-RABBITMQ_USER      = os.getenv("RABBITMQ_USER")
-RABBITMQ_PASSWORD  = os.getenv("RABBITMQ_PASSWORD")
-RABBITMQ_EXCHANGE  = os.getenv("RABBITMQ_L_EXCHANGE")
-RABBITMQ_QUEUE     = "model.fare.train"  # unique queue bound to the fanout
+RABBITMQ_HOST = os.getenv("RABBITMQ_HOST")
+RABBITMQ_PORT = int(os.getenv("RABBITMQ_PORT"))
+RABBITMQ_USER = os.getenv("RABBITMQ_USER")
+RABBITMQ_PASSWORD = os.getenv("RABBITMQ_PASSWORD")
+RABBITMQ_EXCHANGE = os.getenv("RABBITMQ_L_EXCHANGE")
+RABBITMQ_QUEUE = "model.fare.train"  # unique queue bound to the fanout
 
-REDIS_HOST         = os.getenv("REDIS_HOST")
-REDIS_PORT         = int(os.getenv("REDIS_PORT"))
-REDIS_MODEL_ROOT     = os.getenv("REDIS_MODEL_ROOT")
+REDIS_HOST = os.getenv("REDIS_HOST")
+REDIS_PORT = int(os.getenv("REDIS_PORT"))
+REDIS_MODEL_ROOT = os.getenv("REDIS_MODEL_ROOT")
 REDIS_FARE_MODEL_KEY = os.getenv("REDIS_FARE_MODEL_KEY")
-REDIS_KEY          = f"{REDIS_MODEL_ROOT}:{REDIS_FARE_MODEL_KEY}:status"
+REDIS_KEY = f"{REDIS_MODEL_ROOT}:{REDIS_FARE_MODEL_KEY}:status"
 
-PUSHGATEWAY_URL    = os.getenv("PUSHGATEWAY_URL")
-SPARK_MASTER_URL   = os.getenv("SPARK_MASTER_URL")
+PUSHGATEWAY_URL = os.getenv("PUSHGATEWAY_URL")
+SPARK_MASTER_URL = os.getenv("SPARK_MASTER_URL")
 
 # Taxi types that have fare data
-FARE_TAXI_TYPES    = ["yellow", "green"] # add "fhvhv" later
+FARE_TAXI_TYPES = ["yellow", "green"]  # add "fhvhv" later
 
 # ── Spark ──────────────────────────────────────────────────────────────────
 
+
 def get_spark() -> SparkSession:
     spark = (
-        SparkSession.builder
-        .master(SPARK_MASTER_URL)
+        SparkSession.builder.master(SPARK_MASTER_URL)
         .appName("nyc-taxi-fare-trainer")
         .config("spark.sql.parquet.enableVectorizedReader", "false")
         .config("spark.driver.memory", "2g")
@@ -67,6 +67,7 @@ def get_spark() -> SparkSession:
 
 # ── Redis ──────────────────────────────────────────────────────────────────
 
+
 def set_model_status(status: str) -> None:
     """Set model status in Redis: training | ready | failed."""
     try:
@@ -78,6 +79,7 @@ def set_model_status(status: str) -> None:
 
 
 # ── Training ───────────────────────────────────────────────────────────────
+
 
 def run_training() -> None:
     logger.info("=== Starting fare model training ===")
@@ -140,16 +142,14 @@ def run_training() -> None:
 
         # ── Feature selection & filtering ──────────────────────────────────
         df = df.filter(
-            F.col("avg_fare").isNotNull() &
-            (F.col("avg_fare") > 0) &
-            (F.col("avg_fare") < 200)
+            F.col("avg_fare").isNotNull()
+            & (F.col("avg_fare") > 0)
+            & (F.col("avg_fare") < 200)
         )
 
         # Encode taxi_type as numeric index
         type_indexer = StringIndexer(
-            inputCol="taxi_type",
-            outputCol="taxi_type_idx",
-            handleInvalid="keep"
+            inputCol="taxi_type", outputCol="taxi_type_idx", handleInvalid="keep"
         )
 
         feature_cols = [
@@ -161,16 +161,11 @@ def run_training() -> None:
         ]
 
         assembler = VectorAssembler(
-            inputCols=feature_cols,
-            outputCol="features_raw",
-            handleInvalid="skip"
+            inputCols=feature_cols, outputCol="features_raw", handleInvalid="skip"
         )
 
         scaler = StandardScaler(
-            inputCol="features_raw",
-            outputCol="features",
-            withMean=True,
-            withStd=True
+            inputCol="features_raw", outputCol="features", withMean=True, withStd=True
         )
 
         lr = LinearRegression(
@@ -204,7 +199,7 @@ def run_training() -> None:
         )
 
         rmse = rmse_eval.evaluate(predictions)
-        mae  = mae_eval.evaluate(predictions)
+        mae = mae_eval.evaluate(predictions)
 
         rmse_gauge.set(rmse)
         mae_gauge.set(mae)
@@ -238,13 +233,14 @@ def run_training() -> None:
 
 # ── RabbitMQ consumer ──────────────────────────────────────────────────────
 
+
 def on_message(ch, method, properties, body) -> None:
     try:
         payload = json.loads(body)
         logger.info(f"Received message: {payload}")
         _timestamp_ = payload.get("timestamp", "N/A")
         _event_ = payload.get("event", "N/A")
-        
+
         logger.info(f" ({_timestamp_}) - Processing event: {_event_} ...")
         # run_training()
         ch.basic_ack(delivery_tag=method.delivery_tag)
@@ -269,22 +265,19 @@ def start_consumer() -> None:
 
             # Declare fanout exchange and bind a dedicated queue for this service
             channel.exchange_declare(
-                exchange=RABBITMQ_EXCHANGE,
-                exchange_type="fanout",
-                durable=True
+                exchange=RABBITMQ_EXCHANGE, exchange_type="fanout", durable=True
             )
             channel.queue_declare(queue=RABBITMQ_QUEUE, durable=True)
-            channel.queue_bind(
-                queue=RABBITMQ_QUEUE,
-                exchange=RABBITMQ_EXCHANGE
-            )
+            channel.queue_bind(queue=RABBITMQ_QUEUE, exchange=RABBITMQ_EXCHANGE)
 
             channel.basic_qos(prefetch_count=1)
             channel.basic_consume(
                 queue=RABBITMQ_QUEUE,
                 on_message_callback=on_message,
             )
-            logger.info(f"Listening on exchange: {RABBITMQ_EXCHANGE} / queue: {RABBITMQ_QUEUE}")
+            logger.info(
+                f"Listening on exchange: {RABBITMQ_EXCHANGE} / queue: {RABBITMQ_QUEUE}"
+            )
             channel.start_consuming()
             return
         except Exception as e:

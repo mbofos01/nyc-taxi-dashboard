@@ -59,9 +59,12 @@ app = FastAPI(
     ),
     version="1.0.0",
     openapi_tags=[
-        {"name": "health",       "description": "Service health"},
-        {"name": "triggers",     "description": "Trigger ETL pipeline stages via RabbitMQ"},
-        {"name": "invalidation", "description": "Force pipeline stages to re-run by clearing Redis state and/or deleting data files"},
+        {"name": "health", "description": "Service health"},
+        {"name": "triggers", "description": "Trigger ETL pipeline stages via RabbitMQ"},
+        {
+            "name": "invalidation",
+            "description": "Force pipeline stages to re-run by clearing Redis state and/or deleting data files",
+        },
     ],
     redoc_url=None,  # disable default, overridden below
 )
@@ -115,8 +118,7 @@ def _publish(queue: str, payload: dict) -> None:
         logger.info(f"Published to '{queue}': {payload}")
     except Exception as e:
         logger.error(f"Failed to publish to '{queue}': {e}")
-        raise HTTPException(
-            status_code=503, detail=f"RabbitMQ unavailable: {e}")
+        raise HTTPException(status_code=503, detail=f"RabbitMQ unavailable: {e}")
 
 
 def _publish_fanout(exchange: str, payload: dict) -> None:
@@ -147,8 +149,7 @@ def _publish_fanout(exchange: str, payload: dict) -> None:
         logger.info(f"Published to fanout exchange '{exchange}': {payload}")
     except Exception as e:
         logger.error(f"Failed to publish to fanout exchange '{exchange}': {e}")
-        raise HTTPException(
-            status_code=503, detail=f"RabbitMQ unavailable: {e}")
+        raise HTTPException(status_code=503, detail=f"RabbitMQ unavailable: {e}")
 
 
 def _now() -> str:
@@ -182,13 +183,21 @@ def health():
     description="Publishes a run command to the extract command queue.",
 )
 def trigger_extract():
-    _publish(RABBITMQ_CMD_EXTRACT, {
-        "command":      "run",
-        "service":      "extract",
-        "triggered_by": "api",
-        "timestamp":    _now(),
-    })
-    return TriggerResponse(status="triggered", service="extract", queue=RABBITMQ_CMD_EXTRACT, timestamp=_now())
+    _publish(
+        RABBITMQ_CMD_EXTRACT,
+        {
+            "command": "run",
+            "service": "extract",
+            "triggered_by": "api",
+            "timestamp": _now(),
+        },
+    )
+    return TriggerResponse(
+        status="triggered",
+        service="extract",
+        queue=RABBITMQ_CMD_EXTRACT,
+        timestamp=_now(),
+    )
 
 
 @app.post(
@@ -202,13 +211,21 @@ def trigger_extract():
     ),
 )
 def trigger_transform():
-    _publish(RABBITMQ_E_QUEUE, {
-        "event":        "extraction_completed",
-        "triggered_by": "api",
-        "summary":      "Triggered via API",
-        "timestamp":    _now(),
-    })
-    return TriggerResponse(status="triggered", service="transform", queue=RABBITMQ_E_QUEUE, timestamp=_now())
+    _publish(
+        RABBITMQ_E_QUEUE,
+        {
+            "event": "extraction_completed",
+            "triggered_by": "api",
+            "summary": "Triggered via API",
+            "timestamp": _now(),
+        },
+    )
+    return TriggerResponse(
+        status="triggered",
+        service="transform",
+        queue=RABBITMQ_E_QUEUE,
+        timestamp=_now(),
+    )
 
 
 @app.post(
@@ -222,13 +239,18 @@ def trigger_transform():
     ),
 )
 def trigger_load():
-    _publish(RABBITMQ_T_QUEUE, {
-        "event":        "transform_completed",
-        "triggered_by": "api",
-        "summary":      "Triggered via API",
-        "timestamp":    _now(),
-    })
-    return TriggerResponse(status="triggered", service="load", queue=RABBITMQ_T_QUEUE, timestamp=_now())
+    _publish(
+        RABBITMQ_T_QUEUE,
+        {
+            "event": "transform_completed",
+            "triggered_by": "api",
+            "summary": "Triggered via API",
+            "timestamp": _now(),
+        },
+    )
+    return TriggerResponse(
+        status="triggered", service="load", queue=RABBITMQ_T_QUEUE, timestamp=_now()
+    )
 
 
 @app.post(
@@ -242,13 +264,21 @@ def trigger_load():
     ),
 )
 def trigger_loaded():
-    _publish_fanout(RABBITMQ_L_EXCHANGE, {
-        "event":        "load_completed",
-        "triggered_by": "api",
-        "summary":      "Triggered via API",
-        "timestamp":    _now(),
-    })
-    return TriggerResponse(status="triggered", service="loaded-fanout", queue=RABBITMQ_L_EXCHANGE, timestamp=_now())
+    _publish_fanout(
+        RABBITMQ_L_EXCHANGE,
+        {
+            "event": "load_completed",
+            "triggered_by": "api",
+            "summary": "Triggered via API",
+            "timestamp": _now(),
+        },
+    )
+    return TriggerResponse(
+        status="triggered",
+        service="loaded-fanout",
+        queue=RABBITMQ_L_EXCHANGE,
+        timestamp=_now(),
+    )
 
 
 # ── Routes: ETL Invalidation ─────────────────────────────────────────────
@@ -269,9 +299,10 @@ def invalidate_extract():
         r.delete(redis_key)
         _clear_dir(RAW_DATA_DIR)
     except Exception as e:
-        raise HTTPException(
-            status_code=503, detail=f"Failed to delete raw data: {e}")
-    return InvalidateResponse(status="deleted", keys_deleted=[redis_key], timestamp=_now())
+        raise HTTPException(status_code=503, detail=f"Failed to delete raw data: {e}")
+    return InvalidateResponse(
+        status="deleted", keys_deleted=[redis_key], timestamp=_now()
+    )
 
 
 @app.delete(
@@ -294,7 +325,9 @@ def invalidate_transform():
     except Exception as e:
         raise HTTPException(status_code=503, detail=f"Redis unavailable: {e}")
 
-    return InvalidateResponse(status="invalidated", keys_deleted=[key], timestamp=_now())
+    return InvalidateResponse(
+        status="invalidated", keys_deleted=[key], timestamp=_now()
+    )
 
 
 @app.delete(
@@ -318,7 +351,9 @@ def invalidate_load():
         logger.info(f"Invalidated Redis keys: {hash_key}, set {flag_key}=1")
     except Exception as e:
         raise HTTPException(status_code=503, detail=f"Redis unavailable: {e}")
-    return InvalidateResponse(status="invalidated", keys_deleted=[hash_key, flag_key], timestamp=_now())
+    return InvalidateResponse(
+        status="invalidated", keys_deleted=[hash_key, flag_key], timestamp=_now()
+    )
 
 
 @app.delete(
@@ -347,4 +382,6 @@ def invalidate_pipeline():
         _clear_dir(RAW_DATA_DIR)
     except Exception as e:
         raise HTTPException(status_code=503, detail=f"Redis unavailable: {e}")
-    return InvalidateResponse(status="invalidated", keys_deleted=keys + [flag_key], timestamp=_now())
+    return InvalidateResponse(
+        status="invalidated", keys_deleted=keys + [flag_key], timestamp=_now()
+    )

@@ -36,9 +36,9 @@ RABBITMQ_HOST = os.getenv("RABBITMQ_HOST")
 RABBITMQ_PORT = int(os.getenv("RABBITMQ_PORT"))
 RABBITMQ_USER = os.getenv("RABBITMQ_USER")
 RABBITMQ_PASSWORD = os.getenv("RABBITMQ_PASSWORD")
-RABBITMQ_IN_QUEUE  = os.getenv("RABBITMQ_E_QUEUE")             # listen
-RABBITMQ_OUT_QUEUE = os.getenv("RABBITMQ_T_QUEUE")             # publish
-PUSHGATEWAY_URL    = os.getenv("PUSHGATEWAY_URL")
+RABBITMQ_IN_QUEUE = os.getenv("RABBITMQ_E_QUEUE")  # listen
+RABBITMQ_OUT_QUEUE = os.getenv("RABBITMQ_T_QUEUE")  # publish
+PUSHGATEWAY_URL = os.getenv("PUSHGATEWAY_URL")
 SPARK_MASTER_URL = os.getenv("SPARK_MASTER_URL")
 REDIS_HOST = os.getenv("REDIS_HOST")
 REDIS_PORT = int(os.getenv("REDIS_PORT"))
@@ -56,53 +56,53 @@ r = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, decode_responses=True)
 # Raw pickup-datetime column per taxi type (used for per-file date validation)
 DATETIME_COLS = {
     "yellow": "tpep_pickup_datetime",
-    "green":  "lpep_pickup_datetime",
-    "fhv":    "pickup_datetime",
-    "fhvhv":  "pickup_datetime",
+    "green": "lpep_pickup_datetime",
+    "fhv": "pickup_datetime",
+    "fhvhv": "pickup_datetime",
 }
 
 COLUMN_MAPS = {
     "yellow": {
-        "tpep_pickup_datetime":  "pickup_datetime",
+        "tpep_pickup_datetime": "pickup_datetime",
         "tpep_dropoff_datetime": "dropoff_datetime",
-        "PULocationID":          "pickup_location_id",
-        "DOLocationID":          "dropoff_location_id",
-        "passenger_count":       "passenger_count",
-        "trip_distance":         "trip_distance",
-        "fare_amount":           "fare_amount",
-        "tip_amount":            "tip_amount",
-        "total_amount":          "total_amount",
-        "payment_type":          "payment_type",
-        "RatecodeID":            "rate_code",
+        "PULocationID": "pickup_location_id",
+        "DOLocationID": "dropoff_location_id",
+        "passenger_count": "passenger_count",
+        "trip_distance": "trip_distance",
+        "fare_amount": "fare_amount",
+        "tip_amount": "tip_amount",
+        "total_amount": "total_amount",
+        "payment_type": "payment_type",
+        "RatecodeID": "rate_code",
     },
     "green": {
-        "lpep_pickup_datetime":  "pickup_datetime",
+        "lpep_pickup_datetime": "pickup_datetime",
         "lpep_dropoff_datetime": "dropoff_datetime",
-        "PULocationID":          "pickup_location_id",
-        "DOLocationID":          "dropoff_location_id",
-        "passenger_count":       "passenger_count",
-        "trip_distance":         "trip_distance",
-        "fare_amount":           "fare_amount",
-        "tip_amount":            "tip_amount",
-        "total_amount":          "total_amount",
-        "payment_type":          "payment_type",
-        "RatecodeID":            "rate_code",
+        "PULocationID": "pickup_location_id",
+        "DOLocationID": "dropoff_location_id",
+        "passenger_count": "passenger_count",
+        "trip_distance": "trip_distance",
+        "fare_amount": "fare_amount",
+        "tip_amount": "tip_amount",
+        "total_amount": "total_amount",
+        "payment_type": "payment_type",
+        "RatecodeID": "rate_code",
     },
     "fhv": {
-        "pickup_datetime":  "pickup_datetime",
+        "pickup_datetime": "pickup_datetime",
         "dropOff_datetime": "dropoff_datetime",
-        "PUlocationID":     "pickup_location_id",
-        "DOlocationID":     "dropoff_location_id",
+        "PUlocationID": "pickup_location_id",
+        "DOlocationID": "dropoff_location_id",
     },
     "fhvhv": {
-        "pickup_datetime":     "pickup_datetime",
-        "dropoff_datetime":    "dropoff_datetime",
-        "PULocationID":        "pickup_location_id",
-        "DOLocationID":        "dropoff_location_id",
-        "trip_miles":          "trip_distance",
+        "pickup_datetime": "pickup_datetime",
+        "dropoff_datetime": "dropoff_datetime",
+        "PULocationID": "pickup_location_id",
+        "DOLocationID": "dropoff_location_id",
+        "trip_miles": "trip_distance",
         "base_passenger_fare": "fare_amount",
-        "tips":                "tip_amount",
-        "driver_pay":          "total_amount",
+        "tips": "tip_amount",
+        "driver_pay": "total_amount",
     },
 }
 
@@ -113,8 +113,7 @@ COLUMN_MAPS = {
 def get_spark() -> SparkSession:
     """Create (or reuse) the SparkSession connected to the standalone master."""
     spark = (
-        SparkSession.builder
-        .master(SPARK_MASTER_URL)
+        SparkSession.builder.master(SPARK_MASTER_URL)
         .appName("nyc-taxi-transform")
         .config("spark.sql.parquet.enableVectorizedReader", "false")
         .config("spark.driver.memory", "2g")
@@ -132,6 +131,7 @@ def get_spark() -> SparkSession:
 
 # ── Transformation helpers ─────────────────────────────────────────────────
 
+
 def _is_valid_parquet(path: str) -> bool:
     """
     Quick sanity-check: valid Parquet files start AND end with the 4-byte
@@ -142,7 +142,7 @@ def _is_valid_parquet(path: str) -> bool:
     try:
         with open(path, "rb") as fh:
             header = fh.read(4)
-            fh.seek(-4, 2)          # 4 bytes from end
+            fh.seek(-4, 2)  # 4 bytes from end
             footer = fh.read(4)
         return header == MAGIC and footer == MAGIC
     except Exception as e:
@@ -150,7 +150,9 @@ def _is_valid_parquet(path: str) -> bool:
         return False
 
 
-def load_and_validate_file(spark: SparkSession, file: str, taxi_type: str) -> DataFrame | None:
+def load_and_validate_file(
+    spark: SparkSession, file: str, taxi_type: str
+) -> DataFrame | None:
     """
     Read a single Parquet file and immediately discard any rows whose
     pickup timestamp does not match the year-month encoded in the filename
@@ -160,8 +162,7 @@ def load_and_validate_file(spark: SparkSession, file: str, taxi_type: str) -> Da
     Returns None if the file cannot be read or contains no valid rows.
     """
     if not _is_valid_parquet(file):
-        logger.warning(
-            f"Skipping corrupt/incomplete parquet (bad magic bytes): {file}")
+        logger.warning(f"Skipping corrupt/incomplete parquet (bad magic bytes): {file}")
         return None
 
     try:
@@ -171,17 +172,13 @@ def load_and_validate_file(spark: SparkSession, file: str, taxi_type: str) -> Da
         return None
 
     dt_col = DATETIME_COLS.get(taxi_type)
-    m = re.search(r'_(\d{4})-(\d{2})\.parquet$', Path(file).name)
+    m = re.search(r"_(\d{4})-(\d{2})\.parquet$", Path(file).name)
 
     if m and dt_col and dt_col in df.columns:
         exp_year = int(m.group(1))
         exp_month = int(m.group(2))
-        df = df.filter(
-            (F.year(dt_col) == exp_year) &
-            (F.month(dt_col) == exp_month)
-        )
-        logger.info(
-            f"Read & date-validated ({exp_year}-{exp_month:02d}): {file}")
+        df = df.filter((F.year(dt_col) == exp_year) & (F.month(dt_col) == exp_month))
+        logger.info(f"Read & date-validated ({exp_year}-{exp_month:02d}): {file}")
     else:
         logger.info(f"Read (no date validation possible): {file}")
 
@@ -203,58 +200,50 @@ def clean(df: DataFrame) -> DataFrame:
     """Filter out bad rows and derive time-feature columns."""
     # ── Null guards ────────────────────────────────────────────────────────
     df = df.filter(
-        F.col("pickup_datetime").isNotNull() &
-        F.col("dropoff_datetime").isNotNull() &
-        F.col("pickup_location_id").isNotNull() &
-        F.col("dropoff_location_id").isNotNull()
+        F.col("pickup_datetime").isNotNull()
+        & F.col("dropoff_datetime").isNotNull()
+        & F.col("pickup_location_id").isNotNull()
+        & F.col("dropoff_location_id").isNotNull()
     )
 
     # ── Secondary date sanity check ────────────────────────────────────────
     # Catches files with no date in their name and any edge-case timezone
     # artefacts that survived the per-file filename validation above.
     df = df.filter(
-        (F.year("pickup_datetime") >= 2019) &
-        (F.year("pickup_datetime") <= F.year(F.current_date()))
+        (F.year("pickup_datetime") >= 2019)
+        & (F.year("pickup_datetime") <= F.year(F.current_date()))
     )
 
     # ── Trip duration ──────────────────────────────────────────────────────
     df = df.withColumn(
         "trip_duration_minutes",
-        (F.unix_timestamp("dropoff_datetime") -
-         F.unix_timestamp("pickup_datetime")) / 60.0,
+        (F.unix_timestamp("dropoff_datetime") - F.unix_timestamp("pickup_datetime"))
+        / 60.0,
     )
     df = df.filter(
-        (F.col("trip_duration_minutes") > 0) &
-        (F.col("trip_duration_minutes") < 300)
+        (F.col("trip_duration_minutes") > 0) & (F.col("trip_duration_minutes") < 300)
     )
 
     # ── Range checks on optional numeric columns ───────────────────────────
     if "trip_distance" in df.columns:
-        df = df.filter(
-            (F.col("trip_distance") >= 0) &
-            (F.col("trip_distance") < 200)
-        )
+        df = df.filter((F.col("trip_distance") >= 0) & (F.col("trip_distance") < 200))
     if "fare_amount" in df.columns:
-        df = df.filter(
-            (F.col("fare_amount") >= 0) &
-            (F.col("fare_amount") < 1000)
-        )
+        df = df.filter((F.col("fare_amount") >= 0) & (F.col("fare_amount") < 1000))
 
     # ── Time features ──────────────────────────────────────────────────────
     df = (
-        df
-        .withColumn("pickup_hour",  F.hour("pickup_datetime"))
-        .withColumn("pickup_dow",   F.dayofweek("pickup_datetime"))
+        df.withColumn("pickup_hour", F.hour("pickup_datetime"))
+        .withColumn("pickup_dow", F.dayofweek("pickup_datetime"))
         .withColumn("pickup_month", F.month("pickup_datetime"))
-        .withColumn("pickup_year",  F.year("pickup_datetime"))
-        .withColumn("pickup_date",  F.to_date("pickup_datetime"))
-        .withColumn("is_weekend",   F.dayofweek("pickup_datetime").isin(1, 7))
+        .withColumn("pickup_year", F.year("pickup_datetime"))
+        .withColumn("pickup_date", F.to_date("pickup_datetime"))
+        .withColumn("is_weekend", F.dayofweek("pickup_datetime").isin(1, 7))
         .withColumn(
             "time_bucket",
-            F.when(F.col("pickup_hour").between(6,  11), "morning")
-             .when(F.col("pickup_hour").between(12, 17), "afternoon")
-             .when(F.col("pickup_hour").between(18, 22), "evening")
-             .otherwise("night")
+            F.when(F.col("pickup_hour").between(6, 11), "morning")
+            .when(F.col("pickup_hour").between(12, 17), "afternoon")
+            .when(F.col("pickup_hour").between(18, 22), "evening")
+            .otherwise("night"),
         )
     )
 
@@ -263,12 +252,12 @@ def clean(df: DataFrame) -> DataFrame:
 
 # ── Aggregations ───────────────────────────────────────────────────────────
 
+
 def agg_zone_hourly(df: DataFrame) -> DataFrame:
     """Trip count + averages per zone per hour — feeds map & demand forecast."""
     aggs = [F.count("*").alias("trip_count")]
     if "trip_duration_minutes" in df.columns:
-        aggs.append(F.avg("trip_duration_minutes").alias(
-            "avg_duration_minutes"))
+        aggs.append(F.avg("trip_duration_minutes").alias("avg_duration_minutes"))
     if "trip_distance" in df.columns:
         aggs.append(F.avg("trip_distance").alias("avg_distance"))
     if "fare_amount" in df.columns:
@@ -276,8 +265,13 @@ def agg_zone_hourly(df: DataFrame) -> DataFrame:
     if "total_amount" in df.columns:
         aggs.append(F.avg("total_amount").alias("avg_total"))
     return df.groupBy(
-        "pickup_year", "pickup_month", "pickup_date", "pickup_dow",
-        "pickup_hour", "pickup_location_id", "taxi_type",
+        "pickup_year",
+        "pickup_month",
+        "pickup_date",
+        "pickup_dow",
+        "pickup_hour",
+        "pickup_location_id",
+        "taxi_type",
     ).agg(*aggs)
 
 
@@ -285,8 +279,7 @@ def agg_daily_stats(df: DataFrame) -> DataFrame:
     """Daily summary per taxi type — feeds KPI cards."""
     aggs = [F.count("*").alias("trip_count")]
     if "trip_duration_minutes" in df.columns:
-        aggs.append(F.avg("trip_duration_minutes").alias(
-            "avg_duration_minutes"))
+        aggs.append(F.avg("trip_duration_minutes").alias("avg_duration_minutes"))
     if "passenger_count" in df.columns:
         aggs.append(F.sum("passenger_count").alias("total_passengers"))
     if "fare_amount" in df.columns:
@@ -300,7 +293,9 @@ def agg_daily_stats(df: DataFrame) -> DataFrame:
 def agg_zone_time_buckets(df: DataFrame) -> DataFrame:
     """Trip count per zone per time bucket — feeds hotspot clustering."""
     return df.groupBy(
-        "pickup_location_id", "time_bucket", "taxi_type",
+        "pickup_location_id",
+        "time_bucket",
+        "taxi_type",
     ).agg(F.count("*").alias("trip_count"))
 
 
@@ -317,6 +312,7 @@ def agg_zone_anomaly_stats(df: DataFrame) -> DataFrame:
 
 
 # ── Write helper ───────────────────────────────────────────────────────────
+
 
 def write_parquet(df: DataFrame, name: str, merge: bool = True) -> None:
     """
@@ -340,8 +336,7 @@ def write_parquet(df: DataFrame, name: str, merge: bool = True) -> None:
             df = existing.unionByName(df, allowMissingColumns=True)
             logger.info(f"Merging with existing data: {out}")
         except Exception as e:
-            logger.warning(
-                f"Could not read existing data at {out}, overwriting: {e}")
+            logger.warning(f"Could not read existing data at {out}, overwriting: {e}")
 
     # Write to a temp path first — this keeps the original intact while Spark
     # reads it (if merging), avoiding a FileNotFound mid-job.
@@ -405,38 +400,56 @@ def process_files(file_list: List[Path]) -> None:
 
     # ── Prometheus metrics ─────────────────────────────────────────────────
     registry = CollectorRegistry()
-    g_processed = Gauge("etl_transform_files_processed_total",
-                        "Number of valid Parquet files processed per taxi type",
-                        ["taxi_type"], registry=registry)
-    g_corrupt = Gauge("transform_files_corrupt_total",
-                      "Files skipped due to corrupt or unreadable parquet",
-                      ["taxi_type"], registry=registry)
-    g_rows_before = Gauge("etl_transform_rows_before_cleaning",
-                          "Row count after normalisation, before cleaning, per taxi type",
-                          ["taxi_type"], registry=registry)
-    g_rows_after = Gauge("etl_transform_rows_after_cleaning",
-                         "Row count after cleaning per taxi type",
-                         ["taxi_type"], registry=registry)
-    g_taxi_duration = Gauge("etl_transform_processing_duration_seconds",
-                            "Processing duration per taxi type in seconds",
-                            ["taxi_type"], registry=registry)
-    g_duration = Gauge("transform_total_duration_seconds",
-                       "Total wall-clock time of the transform run",
-                       registry=registry)
-    g_last_run = Gauge("etl_transform_last_success_timestamp",
-                       "Unix timestamp of the last successful transform run",
-                       registry=registry)
+    g_processed = Gauge(
+        "etl_transform_files_processed_total",
+        "Number of valid Parquet files processed per taxi type",
+        ["taxi_type"],
+        registry=registry,
+    )
+    g_corrupt = Gauge(
+        "transform_files_corrupt_total",
+        "Files skipped due to corrupt or unreadable parquet",
+        ["taxi_type"],
+        registry=registry,
+    )
+    g_rows_before = Gauge(
+        "etl_transform_rows_before_cleaning",
+        "Row count after normalisation, before cleaning, per taxi type",
+        ["taxi_type"],
+        registry=registry,
+    )
+    g_rows_after = Gauge(
+        "etl_transform_rows_after_cleaning",
+        "Row count after cleaning per taxi type",
+        ["taxi_type"],
+        registry=registry,
+    )
+    g_taxi_duration = Gauge(
+        "etl_transform_processing_duration_seconds",
+        "Processing duration per taxi type in seconds",
+        ["taxi_type"],
+        registry=registry,
+    )
+    g_duration = Gauge(
+        "transform_total_duration_seconds",
+        "Total wall-clock time of the transform run",
+        registry=registry,
+    )
+    g_last_run = Gauge(
+        "etl_transform_last_success_timestamp",
+        "Unix timestamp of the last successful transform run",
+        registry=registry,
+    )
     # ──────────────────────────────────────────────────────────────────────
 
     # ── Group files by taxi type (derived from filename prefix) ───────────
     grouped: dict[str, List[Path]] = {}
     for file_path in file_list:
-        taxi_type = next(
-            (t for t in COLUMN_MAPS if file_path.name.startswith(t)), None
-        )
+        taxi_type = next((t for t in COLUMN_MAPS if file_path.name.startswith(t)), None)
         if taxi_type is None:
             logger.warning(
-                f"Cannot determine taxi type for {file_path.name}, skipping.")
+                f"Cannot determine taxi type for {file_path.name}, skipping."
+            )
             continue
         grouped.setdefault(taxi_type, []).append(file_path)
 
@@ -467,8 +480,7 @@ def process_files(file_list: List[Path]) -> None:
 
             if not dfs:
                 logger.warning(f"[{taxi_type}] No valid DataFrames, skipping.")
-                g_taxi_duration.labels(
-                    taxi_type=taxi_type).set(time.time() - t0)
+                g_taxi_duration.labels(taxi_type=taxi_type).set(time.time() - t0)
                 continue
 
             # Union all valid DataFrames for this taxi type
@@ -488,44 +500,57 @@ def process_files(file_list: List[Path]) -> None:
                 normalised = normalise(combined, taxi_type)
                 clean_df = clean(normalised)
                 clean_df.cache()
-                rows_after = clean_df.count()    # triggers the cache
-                rows_before = normalised.count()  # extra pass; acceptable for monitoring
+                rows_after = clean_df.count()  # triggers the cache
+                rows_before = (
+                    normalised.count()
+                )  # extra pass; acceptable for monitoring
 
                 # Merge with existing output only if the previous run completed
                 # cleanly. If dirty or missing, overwrite to avoid double-counting.
                 should_merge = previous_clean
                 if not should_merge:
                     logger.info(
-                        f"[{taxi_type}] Dirty/missing flag — overwriting existing output.")
+                        f"[{taxi_type}] Dirty/missing flag — overwriting existing output."
+                    )
 
-                write_parquet(agg_zone_hourly(
-                    clean_df),        f"zone_hourly/{taxi_type}",        merge=should_merge)
-                write_parquet(agg_daily_stats(
-                    clean_df),        f"daily_stats/{taxi_type}",        merge=should_merge)
-                write_parquet(agg_zone_time_buckets(
-                    clean_df),  f"zone_time_buckets/{taxi_type}",  merge=should_merge)
-                write_parquet(agg_zone_anomaly_stats(
-                    clean_df), f"zone_anomaly_stats/{taxi_type}", merge=should_merge)
+                write_parquet(
+                    agg_zone_hourly(clean_df),
+                    f"zone_hourly/{taxi_type}",
+                    merge=should_merge,
+                )
+                write_parquet(
+                    agg_daily_stats(clean_df),
+                    f"daily_stats/{taxi_type}",
+                    merge=should_merge,
+                )
+                write_parquet(
+                    agg_zone_time_buckets(clean_df),
+                    f"zone_time_buckets/{taxi_type}",
+                    merge=should_merge,
+                )
+                write_parquet(
+                    agg_zone_anomaly_stats(clean_df),
+                    f"zone_anomaly_stats/{taxi_type}",
+                    merge=should_merge,
+                )
 
                 # All 4 writes succeeded — mark output as clean and files as done
                 r.set(output_flag_key, "1")
                 for file_path, _ in dfs:
                     r.sadd(
-                        f"{REDIS_TRACKING_ROOT}:{REDIS_PROCESSED_SET}", file_path.name)
+                        f"{REDIS_TRACKING_ROOT}:{REDIS_PROCESSED_SET}", file_path.name
+                    )
                     f.write(f"  DONE: {file_path.name}\n")
-                    logger.info(
-                        f"Marked as processed in Redis: {file_path.name}")
+                    logger.info(f"Marked as processed in Redis: {file_path.name}")
 
                 clean_df.unpersist()
                 g_processed.labels(taxi_type=taxi_type).set(len(dfs))
                 g_rows_before.labels(taxi_type=taxi_type).set(rows_before)
                 g_rows_after.labels(taxi_type=taxi_type).set(rows_after)
-                g_taxi_duration.labels(
-                    taxi_type=taxi_type).set(time.time() - t0)
+                g_taxi_duration.labels(taxi_type=taxi_type).set(time.time() - t0)
 
             except Exception as e:
-                logger.error(
-                    f"[{taxi_type}] Spark pipeline failed: {e}", exc_info=True)
+                logger.error(f"[{taxi_type}] Spark pipeline failed: {e}", exc_info=True)
                 f.write(f"  ERROR: {e}\n")
 
         f.write(f"\n{'===' * 20}\n")
@@ -534,21 +559,23 @@ def process_files(file_list: List[Path]) -> None:
 
     # signal that transformed data is ready for loading
     r.set(f"{REDIS_TRACKING_ROOT}:{REDIS_LOADED_FLAG}", "1")
-    publish({
-        "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC"),
-        "event": "transform_completed",
-        "triggered_by": "Transform stage",
-        "summary": f"Processed {len(file_list)} files across {len(grouped)} taxi types.",
-    })
+    publish(
+        {
+            "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC"),
+            "event": "transform_completed",
+            "triggered_by": "Transform stage",
+            "summary": f"Processed {len(file_list)} files across {len(grouped)} taxi types.",
+        }
+    )
 
     g_duration.set(time.time() - run_start)
     g_last_run.set(time.time())
     try:
-        push_to_gateway(PUSHGATEWAY_URL, job="etl_transform",
-                        registry=registry)
+        push_to_gateway(PUSHGATEWAY_URL, job="etl_transform", registry=registry)
         logger.info(f"Metrics pushed to Pushgateway ({PUSHGATEWAY_URL}).")
     except Exception as e:
         logger.warning(f"Failed to push metrics: {e}")
+
 
 # ── RabbitMQ consumer ──────────────────────────────────────────────────────
 
@@ -604,8 +631,7 @@ def on_message(ch, method, properties, body) -> None:
         _event_ = payload.get("event", "unknown")
         _summary_ = payload.get("summary", "")
 
-        logger.info(
-            f" ({_timestamp_}) - Processing event: {_event_} with {_summary_}.")
+        logger.info(f" ({_timestamp_}) - Processing event: {_event_} with {_summary_}.")
 
         pending_files = find_pending_files()
         if not pending_files:
@@ -653,6 +679,7 @@ def start_consumer() -> None:
 
     logger.error("Could not connect to RabbitMQ after 10 attempts. Exiting.")
     sys.exit(1)
+
 
 # ── Entry point ────────────────────────────────────────────────────────────
 

@@ -45,11 +45,12 @@ RABBITMQ_QUEUE = os.getenv("RABBITMQ_E_QUEUE")
 RABBITMQ_CMD_QUEUE = os.getenv("RABBITMQ_CMD_EXTRACT", "etl.cmd.extract")
 PUSHGATEWAY_URL = os.getenv("PUSHGATEWAY_URL")
 
-CRON_DAY = os.getenv("EXTRACT_CRON_DAY",  "15")   # day-of-month to run
-CRON_HOUR = os.getenv("EXTRACT_CRON_HOUR", "2")    # UTC hour to run
+CRON_DAY = os.getenv("EXTRACT_CRON_DAY", "15")  # day-of-month to run
+CRON_HOUR = os.getenv("EXTRACT_CRON_HOUR", "2")  # UTC hour to run
 
 
 # ── Download result ────────────────────────────────────────────────────────
+
 
 class DownloadResult(Enum):
     ALREADY_EXISTS = auto()  # file was present on disk, skipped
@@ -61,7 +62,15 @@ class DownloadResult(Enum):
     DOWNLOAD_FAILED = auto()  # network / IO error during GET
 
 
-def _file_path_builder(taxi_type: str, year: int, month: int, create_full_path: bool = False, raw_file_dir: str = RAW_DATA_DIR, create_url: bool = False, base_url: str = TLC_BASE_URL) -> Path | str:
+def _file_path_builder(
+    taxi_type: str,
+    year: int,
+    month: int,
+    create_full_path: bool = False,
+    raw_file_dir: str = RAW_DATA_DIR,
+    create_url: bool = False,
+    base_url: str = TLC_BASE_URL,
+) -> Path | str:
     """
     Builds the file path for a given taxi type, year, and month. Can either return a full local file path or a URL to the TLC data.
 
@@ -78,15 +87,17 @@ def _file_path_builder(taxi_type: str, year: int, month: int, create_full_path: 
     global TAXI_TYPES
     assert taxi_type in TAXI_TYPES, f"Invalid taxi type: {taxi_type}"
     assert 1 <= month <= 12, f"Invalid month: {month}"
-    assert not (
-        create_full_path and create_url), "Cannot create both full path and URL at the same time"
+    assert not (create_full_path and create_url), (
+        "Cannot create both full path and URL at the same time"
+    )
 
     if create_url:
         return f"{base_url}/{taxi_type}_tripdata_{year}-{month:02d}.parquet"
 
     if create_full_path:
-        full_path = Path(raw_file_dir) / \
-            f"{taxi_type}_tripdata_{year}-{month:02d}.parquet"
+        full_path = (
+            Path(raw_file_dir) / f"{taxi_type}_tripdata_{year}-{month:02d}.parquet"
+        )
         return full_path
 
     return f"{taxi_type}_tripdata_{year}-{month:02d}.parquet"
@@ -137,8 +148,7 @@ def _download_file(url: str, dest: Path) -> DownloadResult:
             logger.warning(f"Access denied (403): {url}")
             return DownloadResult.ACCESS_DENIED
         if not head.ok:
-            logger.warning(
-                f"Resource unavailable (HTTP {head.status_code}): {url}")
+            logger.warning(f"Resource unavailable (HTTP {head.status_code}): {url}")
             return DownloadResult.UNAVAILABLE
         logger.info(f"Resource available, downloading: {url}")
     except Exception as e:
@@ -156,8 +166,7 @@ def _download_file(url: str, dest: Path) -> DownloadResult:
         logger.info(f"Saved: {dest.name} ({dest.stat().st_size / 1e6:.1f} MB)")
 
         if not _is_valid_parquet(dest):
-            logger.warning(
-                f"Downloaded file is corrupt, retrying once: {dest.name}")
+            logger.warning(f"Downloaded file is corrupt, retrying once: {dest.name}")
             dest.unlink()
             # ── Single retry ───────────────────────────────────────────────
             try:
@@ -168,11 +177,13 @@ def _download_file(url: str, dest: Path) -> DownloadResult:
                         f.write(chunk)
                 if not _is_valid_parquet(dest):
                     logger.error(
-                        f"Retry also produced corrupt file, marking as failed: {dest.name}")
+                        f"Retry also produced corrupt file, marking as failed: {dest.name}"
+                    )
                     dest.unlink()
                     return DownloadResult.DOWNLOAD_FAILED
                 logger.info(
-                    f"Retry succeeded: {dest.name} ({dest.stat().st_size / 1e6:.1f} MB)")
+                    f"Retry succeeded: {dest.name} ({dest.stat().st_size / 1e6:.1f} MB)"
+                )
             except Exception as e:
                 logger.error(f"Retry download failed for {url}: {e}")
                 if dest.exists():
@@ -199,7 +210,9 @@ def _calculate_end_date():
     return date(today.year, today.month, 1) - relativedelta(months=3)
 
 
-def _check_existing_files(start_date: date, end_date: date, taxi_types: list, raw_data_dir: str = RAW_DATA_DIR) -> tuple[list[Path], int]:
+def _check_existing_files(
+    start_date: date, end_date: date, taxi_types: list, raw_data_dir: str = RAW_DATA_DIR
+) -> tuple[list[Path], int]:
     """
     Walk the expected date range and identify files that need downloading.
 
@@ -227,30 +240,44 @@ def _check_existing_files(start_date: date, end_date: date, taxi_types: list, ra
 
     with out.open("w") as f:
         f.write(f"{'===' * 20} \n")
-        f.write(
-            f"Checking for existing files between {start_date} and {end_date} \n")
+        f.write(f"Checking for existing files between {start_date} and {end_date} \n")
         for taxi_type in taxi_types:
             current = start_date
             while current <= end_date:
                 expected_file = _file_path_builder(
-                    taxi_type, current.year, current.month, create_full_path=True)
+                    taxi_type, current.year, current.month, create_full_path=True
+                )
                 if not expected_file.exists():
                     logger.warning(f"Missing file: {expected_file}")
                     target_url = _file_path_builder(
-                        taxi_type, current.year, current.month, create_full_path=False, create_url=True)
+                        taxi_type,
+                        current.year,
+                        current.month,
+                        create_full_path=False,
+                        create_url=True,
+                    )
                     target_path = _file_path_builder(
-                        taxi_type, current.year, current.month, create_full_path=True)
+                        taxi_type, current.year, current.month, create_full_path=True
+                    )
                     missing_urls.append((target_url, target_path))
                 elif not _is_valid_parquet(expected_file):
                     logger.warning(
-                        f"Corrupt parquet file detected, deleting for re-download: {expected_file.name}")
+                        f"Corrupt parquet file detected, deleting for re-download: {expected_file.name}"
+                    )
                     f.write(
-                        f"Corrupt (deleted, queued for re-download): {expected_file} \n")
+                        f"Corrupt (deleted, queued for re-download): {expected_file} \n"
+                    )
                     expected_file.unlink()
                     target_url = _file_path_builder(
-                        taxi_type, current.year, current.month, create_full_path=False, create_url=True)
+                        taxi_type,
+                        current.year,
+                        current.month,
+                        create_full_path=False,
+                        create_url=True,
+                    )
                     target_path = _file_path_builder(
-                        taxi_type, current.year, current.month, create_full_path=True)
+                        taxi_type, current.year, current.month, create_full_path=True
+                    )
                     missing_urls.append((target_url, target_path))
                 else:
                     f.write(f"File exists: {expected_file} \n")
@@ -328,48 +355,73 @@ def run_extraction():
     """
     run_start = time.time()
     targets, existing_files = _check_existing_files(
-        START_DATE, _calculate_end_date(), TAXI_TYPES)
+        START_DATE, _calculate_end_date(), TAXI_TYPES
+    )
 
     # ── Prometheus metrics ─────────────────────────────────────────────────
     registry = CollectorRegistry()
-    g_downloaded = Gauge("extract_files_downloaded_total",
-                         "Files successfully downloaded this run",
-                         registry=registry)
-    g_skipped = Gauge("extract_files_skipped_total",
-                      "Files skipped because they already existed on disk",
-                      registry=registry)
-    g_not_found = Gauge("extract_files_not_found_total",
-                        "Files that returned HTTP 404 (not yet released)",
-                        registry=registry)
-    g_access_denied = Gauge("extract_files_access_denied_total",
-                            "Files that returned HTTP 403",
-                            registry=registry)
-    g_unavailable = Gauge("extract_files_unavailable_total",
-                          "Files that returned another non-OK HTTP status",
-                          registry=registry)
-    g_check_failed = Gauge("extract_files_check_failed_total",
-                           "Files where the HEAD availability check failed",
-                           registry=registry)
-    g_download_failed = Gauge("extract_files_download_failed_total",
-                              "Files where the GET download failed",
-                              registry=registry)
-    g_duration = Gauge("extract_total_duration_seconds",
-                       "Total wall-clock time of the extraction run",
-                       registry=registry)
-    g_last_run = Gauge("extract_last_run_timestamp",
-                       "Unix timestamp of the last extraction run",
-                       registry=registry)
-    g_file_size = Gauge("extract_file_size_bytes",
-                        "Size of each raw parquet file on disk in bytes",
-                        ["taxi_type", "filename"],
-                        registry=registry)
-    g_total_size = Gauge("extract_total_disk_bytes",
-                         "Total bytes of all raw parquet files on disk",
-                         registry=registry)
-    g_outcome_duration = Gauge("extract_outcome_duration_seconds",
-                               "Total seconds spent on files with each outcome",
-                               ["outcome"],
-                               registry=registry)
+    g_downloaded = Gauge(
+        "extract_files_downloaded_total",
+        "Files successfully downloaded this run",
+        registry=registry,
+    )
+    g_skipped = Gauge(
+        "extract_files_skipped_total",
+        "Files skipped because they already existed on disk",
+        registry=registry,
+    )
+    g_not_found = Gauge(
+        "extract_files_not_found_total",
+        "Files that returned HTTP 404 (not yet released)",
+        registry=registry,
+    )
+    g_access_denied = Gauge(
+        "extract_files_access_denied_total",
+        "Files that returned HTTP 403",
+        registry=registry,
+    )
+    g_unavailable = Gauge(
+        "extract_files_unavailable_total",
+        "Files that returned another non-OK HTTP status",
+        registry=registry,
+    )
+    g_check_failed = Gauge(
+        "extract_files_check_failed_total",
+        "Files where the HEAD availability check failed",
+        registry=registry,
+    )
+    g_download_failed = Gauge(
+        "extract_files_download_failed_total",
+        "Files where the GET download failed",
+        registry=registry,
+    )
+    g_duration = Gauge(
+        "extract_total_duration_seconds",
+        "Total wall-clock time of the extraction run",
+        registry=registry,
+    )
+    g_last_run = Gauge(
+        "extract_last_run_timestamp",
+        "Unix timestamp of the last extraction run",
+        registry=registry,
+    )
+    g_file_size = Gauge(
+        "extract_file_size_bytes",
+        "Size of each raw parquet file on disk in bytes",
+        ["taxi_type", "filename"],
+        registry=registry,
+    )
+    g_total_size = Gauge(
+        "extract_total_disk_bytes",
+        "Total bytes of all raw parquet files on disk",
+        registry=registry,
+    )
+    g_outcome_duration = Gauge(
+        "extract_outcome_duration_seconds",
+        "Total seconds spent on files with each outcome",
+        ["outcome"],
+        registry=registry,
+    )
     # ──────────────────────────────────────────────────────────────────────
 
     counters = {r: 0 for r in DownloadResult}
@@ -384,7 +436,7 @@ def run_extraction():
         time.sleep(SERVER_TIMEOUT)  # be kind to the server
 
     g_downloaded.set(counters[DownloadResult.DOWNLOADED])
-    g_skipped.set(counters[DownloadResult.ALREADY_EXISTS]+existing_files)
+    g_skipped.set(counters[DownloadResult.ALREADY_EXISTS] + existing_files)
     g_not_found.set(counters[DownloadResult.NOT_FOUND])
     g_access_denied.set(counters[DownloadResult.ACCESS_DENIED])
     g_unavailable.set(counters[DownloadResult.UNAVAILABLE])
@@ -412,21 +464,27 @@ def run_extraction():
         logger.warning(f"Failed to push metrics: {e}")
 
     logger.info(f"Summary: {_results_summary(attempts)}")
-    publish({
-        "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC"),
-        "event": "extraction_completed",
-        "triggered_by": "Extract stage",
-        "summary": f"{counters[DownloadResult.DOWNLOADED]} new files downloaded",
-    })
+    publish(
+        {
+            "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC"),
+            "event": "extraction_completed",
+            "triggered_by": "Extract stage",
+            "summary": f"{counters[DownloadResult.DOWNLOADED]} new files downloaded",
+        }
+    )
 
 
 # ── API command consumer ──────────────────────────────────────────────────
+
 
 def start_cmd_consumer() -> None:
     """Listen on the API command queue and run extraction on demand."""
     credentials = pika.PlainCredentials(RABBITMQ_USER, RABBITMQ_PASSWORD)
     params = pika.ConnectionParameters(
-        host=RABBITMQ_HOST, port=RABBITMQ_PORT, credentials=credentials, heartbeat=600,
+        host=RABBITMQ_HOST,
+        port=RABBITMQ_PORT,
+        credentials=credentials,
+        heartbeat=600,
     )
     for attempt in range(1, 11):
         try:
@@ -443,21 +501,18 @@ def start_cmd_consumer() -> None:
                     ch.basic_ack(delivery_tag=method.delivery_tag)
                 except Exception as e:
                     logger.error(f"[CMD] Error: {e}", exc_info=True)
-                    ch.basic_nack(
-                        delivery_tag=method.delivery_tag, requeue=False)
+                    ch.basic_nack(delivery_tag=method.delivery_tag, requeue=False)
 
-            channel.basic_consume(queue=RABBITMQ_CMD_QUEUE,
-                                  on_message_callback=on_cmd)
-            logger.info(
-                f"[CMD] Listening for commands on '{RABBITMQ_CMD_QUEUE}'")
+            channel.basic_consume(queue=RABBITMQ_CMD_QUEUE, on_message_callback=on_cmd)
+            logger.info(f"[CMD] Listening for commands on '{RABBITMQ_CMD_QUEUE}'")
             channel.start_consuming()
             return
         except Exception as e:
-            logger.warning(
-                f"[CMD] Connection attempt {attempt}/10 failed: {e}")
+            logger.warning(f"[CMD] Connection attempt {attempt}/10 failed: {e}")
             time.sleep(10)
     logger.error(
-        "[CMD] Could not connect to RabbitMQ for command queue after 10 attempts.")
+        "[CMD] Could not connect to RabbitMQ for command queue after 10 attempts."
+    )
 
 
 # ── Entry point ────────────────────────────────────────────────────────────
@@ -467,7 +522,8 @@ if __name__ == "__main__":
 
     # API command consumer runs in a daemon thread
     cmd_thread = threading.Thread(
-        target=start_cmd_consumer, daemon=True, name="cmd-consumer")
+        target=start_cmd_consumer, daemon=True, name="cmd-consumer"
+    )
     cmd_thread.start()
 
     # Monthly cron owns the main thread
@@ -479,7 +535,8 @@ if __name__ == "__main__":
         misfire_grace_time=3600,
     )
     logger.info(
-        f"Scheduler started — next run on day={CRON_DAY} of each month at {CRON_HOUR}:00 UTC.")
+        f"Scheduler started — next run on day={CRON_DAY} of each month at {CRON_HOUR}:00 UTC."
+    )
     try:
         scheduler.start()
     except (KeyboardInterrupt, SystemExit):
