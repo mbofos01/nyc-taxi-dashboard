@@ -49,11 +49,17 @@ jobs:
 
       - name: Substitute env placeholders and validate
         run: |
-          # Use the .env file to provide environment variables for envsubst,
-          # ensuring the config is valid with real service names/ports.
+          # Use the .env file but override hostnames to localhost for syntax validation,
+          # since nginx -t tries to resolve upstream hosts even for config testing.
           docker run --rm \
             -v ${{ github.workspace }}/nginx/nginx.conf:/etc/nginx/templates/default.conf.template:ro \
             --env-file .env \
+            -e ETL_API_HOST=localhost \
+            -e SPARK_MASTER_HOST=localhost \
+            -e GRAFANA_HOST=localhost \
+            -e PROMETHEUS_HOST=localhost \
+            -e PUSHGATEWAY_HOST=localhost \
+            -e RABBITMQ_MGMT_HOST=localhost \
             nginx:1.27-alpine nginx -t
 
   build:
