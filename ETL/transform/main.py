@@ -7,7 +7,7 @@ import json
 from pathlib import Path
 from typing import List
 import redis
-from datetime import date, datetime, timezone
+from datetime import datetime, timezone
 import shutil
 import threading
 
@@ -36,14 +36,15 @@ RABBITMQ_HOST = os.getenv("RABBITMQ_HOST")
 RABBITMQ_PORT = int(os.getenv("RABBITMQ_PORT"))
 RABBITMQ_USER = os.getenv("RABBITMQ_USER")
 RABBITMQ_PASSWORD = os.getenv("RABBITMQ_PASSWORD")
-RABBITMQ_IN_QUEUE = os.getenv("RABBITMQ_E_QUEUE")    # listen
-RABBITMQ_OUT_QUEUE = os.getenv("RABBITMQ_T_QUEUE")  # publish
-PUSHGATEWAY_URL = os.getenv("PUSHGATEWAY_URL")
+RABBITMQ_IN_QUEUE  = os.getenv("RABBITMQ_E_QUEUE")             # listen
+RABBITMQ_OUT_QUEUE = os.getenv("RABBITMQ_T_QUEUE")             # publish
+PUSHGATEWAY_URL    = os.getenv("PUSHGATEWAY_URL")
 SPARK_MASTER_URL = os.getenv("SPARK_MASTER_URL")
 REDIS_HOST = os.getenv("REDIS_HOST")
 REDIS_PORT = int(os.getenv("REDIS_PORT"))
 REDIS_TRACKING_ROOT = os.getenv("REDIS_TRACKING_ROOT")
 REDIS_PROCESSED_SET = os.getenv("REDIS_PROCESSED_SET")
+REDIS_LOADED_FLAG = os.getenv("REDIS_LOADED_FLAG")
 # daily morning pending check (UTC)
 CRON_HOUR = int(os.getenv("TRANSFORM_CRON_HOUR"))
 CRON_MINUTE = int(os.getenv("TRANSFORM_CRON_MINUTE"))
@@ -531,11 +532,13 @@ def process_files(file_list: List[Path]) -> None:
 
     spark.stop()
 
+    # signal that transformed data is ready for loading
+    r.set(f"{REDIS_TRACKING_ROOT}:{REDIS_LOADED_FLAG}", "1")
     publish({
         "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC"),
         "event": "transform_completed",
+        "triggered_by": "Transform stage",
         "summary": f"Processed {len(file_list)} files across {len(grouped)} taxi types.",
-        "new_files": len(file_list),
     })
 
     g_duration.set(time.time() - run_start)
@@ -548,6 +551,20 @@ def process_files(file_list: List[Path]) -> None:
         logger.warning(f"Failed to push metrics: {e}")
 
 # ── RabbitMQ consumer ──────────────────────────────────────────────────────
+
+
+def _push_noop_metrics() -> None:
+    """Heartbeat push when transform is skipped (no pending files)."""
+    registry = CollectorRegistry()
+    Gauge(
+        "etl_transform_last_run_timestamp",
+        "Unix timestamp of the last transform run",
+        registry=registry,
+    ).set(time.time())
+    try:
+        push_to_gateway(PUSHGATEWAY_URL, job="etl_transform", registry=registry)
+    except Exception as e:
+        logger.warning(f"Failed to push noop metrics: {e}")
 
 
 def publish(payload: dict) -> None:
@@ -585,18 +602,18 @@ def on_message(ch, method, properties, body) -> None:
         logger.info(f"Received message: {payload}")
         _timestamp_ = payload.get("timestamp", time.time())
         _event_ = payload.get("event", "unknown")
-        _new_files_ = int(payload.get("new_files", 0))
         _summary_ = payload.get("summary", "")
 
         logger.info(
             f" ({_timestamp_}) - Processing event: {_event_} with {_summary_}.")
-        logger.info(f"Extracted files: {_new_files_}")
-
-        if _new_files_ == 0:
-            logger.info(
-                "No new files to process. Testing if pending files exist.")
 
         pending_files = find_pending_files()
+        if not pending_files:
+            logger.info("No pending files to process, skipping.")
+            _push_noop_metrics()
+            ch.basic_ack(delivery_tag=method.delivery_tag)
+            return
+
         process_files(pending_files)
 
         ch.basic_ack(delivery_tag=method.delivery_tag)
@@ -638,7 +655,6 @@ def start_consumer() -> None:
     sys.exit(1)
 
 # ── Entry point ────────────────────────────────────────────────────────────
-
 
 if __name__ == "__main__":
     # Start the RabbitMQ consumer in a daemon thread so the BlockingScheduler
