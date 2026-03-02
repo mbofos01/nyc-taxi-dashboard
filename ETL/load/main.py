@@ -3,12 +3,16 @@ import logging
 import sys
 import time
 import json
+import threading
 from pathlib import Path
-
+from datetime import datetime, timezone
+import redis
 import pandas as pd
 import psycopg2
 from psycopg2.extras import execute_values
 import pika
+from apscheduler.schedulers.blocking import BlockingScheduler
+from apscheduler.triggers.cron import CronTrigger
 from prometheus_client import CollectorRegistry, Gauge, push_to_gateway
 
 # ── Logging ────────────────────────────────────────────────────────────────
@@ -21,22 +25,31 @@ logging.getLogger("pika").setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 
 # ── Config ─────────────────────────────────────────────────────────────────
-PROCESSED_DATA_DIR = os.getenv("PROCESSED_DATA_DIR", "/data/processed")
+PROCESSED_DATA_DIR = os.getenv("PROCESSED_DATA_DIR")
 
-POSTGRES_HOST     = os.getenv("POSTGRES_HOST", "postgres")
-POSTGRES_PORT     = int(os.getenv("POSTGRES_PORT", 5432))
-POSTGRES_DB       = os.getenv("POSTGRES_DB", "nyc_taxi")
-POSTGRES_USER     = os.getenv("POSTGRES_USER", "nyc")
-POSTGRES_PASSWORD = os.getenv("POSTGRES_PASSWORD", "nyc")
+POSTGRES_HOST = os.getenv("POSTGRES_HOST")
+POSTGRES_PORT = int(os.getenv("POSTGRES_PORT"))
+POSTGRES_DB = os.getenv("POSTGRES_DB")
+POSTGRES_USER = os.getenv("POSTGRES_USER")
+POSTGRES_PASSWORD = os.getenv("POSTGRES_PASSWORD")
 
-RABBITMQ_HOST      = os.getenv("RABBITMQ_HOST", "rabbitmq")
-RABBITMQ_PORT      = int(os.getenv("RABBITMQ_PORT", 5672))
-RABBITMQ_USER      = os.getenv("RABBITMQ_USER", "guest")
-RABBITMQ_PASSWORD  = os.getenv("RABBITMQ_PASSWORD", "guest")
-RABBITMQ_IN_QUEUE  = os.getenv("RABBITMQ_T_QUEUE", "etl.transformed")   # listen
-RABBITMQ_L_EXCHANGE = os.getenv("RABBITMQ_L_EXCHANGE", "etl.loaded")    # publish
+RABBITMQ_HOST = os.getenv("RABBITMQ_HOST")
+RABBITMQ_PORT = int(os.getenv("RABBITMQ_PORT"))
+RABBITMQ_USER = os.getenv("RABBITMQ_USER")
+RABBITMQ_PASSWORD = os.getenv("RABBITMQ_PASSWORD")
+RABBITMQ_IN_QUEUE = os.getenv("RABBITMQ_T_QUEUE")              # listen
+RABBITMQ_L_EXCHANGE = os.getenv("RABBITMQ_L_EXCHANGE")          # publish
+REDIS_HOST = os.getenv("REDIS_HOST")
+REDIS_PORT = int(os.getenv("REDIS_PORT"))
+REDIS_TRACKING_ROOT = os.getenv("REDIS_TRACKING_ROOT")
+REDIS_LOADED_DIRS_HASH = os.getenv("REDIS_LOADED_DIRS_HASH")
+REDIS_LOADED_FLAG = os.getenv("REDIS_LOADED_FLAG")
+PUSHGATEWAY_URL = os.getenv("PUSHGATEWAY_URL")
 
-PUSHGATEWAY_URL = os.getenv("PUSHGATEWAY_URL", "http://pushgateway:9091")
+LOAD_CRON_HOUR = int(os.getenv("LOAD_CRON_HOUR"))
+LOAD_CRON_MINUTE = int(os.getenv("LOAD_CRON_MINUTE"))
+
+r = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, decode_responses=True)
 
 # Taxi types are discovered dynamically from the processed data directory.
 
@@ -62,6 +75,7 @@ DATASETS: dict[str, tuple[str, list[str]]] = {
 }
 
 # ── PostgreSQL helpers ─────────────────────────────────────────────────────
+
 
 def get_pg_conn() -> psycopg2.extensions.connection:
     """Return a new psycopg2 connection using credentials from environment variables."""
@@ -147,6 +161,17 @@ def upsert_dataframe(
     # Replace NaN with None so psycopg2 inserts NULL
     df = df.where(pd.notnull(df), None)
 
+    # Deduplicate on PK columns: ON CONFLICT DO UPDATE cannot affect the same
+    # row twice within a single command (happens when Spark writes duplicate
+    # rows across part-files for the same partition key).
+    before = len(df)
+    df = df.drop_duplicates(subset=pk_cols, keep="last")
+    dropped = before - len(df)
+    if dropped:
+        logger.warning(
+            f"[{table}] Dropped {dropped} duplicate PK row(s) before upsert."
+        )
+
     cols = list(df.columns)
     values = [tuple(row) for row in df.itertuples(index=False, name=None)]
 
@@ -166,6 +191,53 @@ def upsert_dataframe(
         execute_values(cur, sql, values)
     conn.commit()
     return len(values)
+
+
+# ── Loaded-dirs tracking (Redis hash) ────────────────────────────────────
+
+def _loaded_dirs_key() -> str:
+    return f"{REDIS_TRACKING_ROOT}:{REDIS_LOADED_DIRS_HASH}"
+
+
+def _get_dir_mtime(path: Path) -> float:
+    """Return the most-recent mtime among all parquet files in *path*."""
+    files = list(path.rglob("*.parquet"))
+    if not files:
+        return 0.0
+    return max(f.stat().st_mtime for f in files)
+
+
+def _is_dir_pending(dataset: str, taxi_type: str, path: Path) -> bool:
+    """Return True if *path* has been modified since it was last loaded."""
+    field = f"{dataset}/{taxi_type}"
+    stored = r.hget(_loaded_dirs_key(), field)
+    if stored is None:
+        return True  # never loaded
+    return _get_dir_mtime(path) > float(stored)
+
+
+def _mark_dir_loaded(dataset: str, taxi_type: str, path: Path) -> None:
+    """Record the current mtime of *path* as the last-loaded timestamp."""
+    field = f"{dataset}/{taxi_type}"
+    r.hset(_loaded_dirs_key(), field, str(_get_dir_mtime(path)))
+
+
+def find_pending_dirs(processed_dir: str) -> list[tuple[str, str]]:
+    """
+    Return (dataset, taxi_type) pairs whose processed directory has been
+    modified since the last successful load (or has never been loaded).
+    """
+    pending = []
+    for dataset in DATASETS:
+        dataset_dir = Path(processed_dir) / dataset
+        if not dataset_dir.exists():
+            continue
+        for taxi_dir in sorted(dataset_dir.iterdir()):
+            if not taxi_dir.is_dir():
+                continue
+            if _is_dir_pending(dataset, taxi_dir.name, taxi_dir):
+                pending.append((dataset, taxi_dir.name))
+    return pending
 
 
 # ── Dataset reader ─────────────────────────────────────────────────────────
@@ -189,14 +261,15 @@ def _push_metrics(registry: CollectorRegistry) -> None:
     """Push *registry* metrics to Prometheus Pushgateway; logs and swallows any connection error."""
     try:
         push_to_gateway(PUSHGATEWAY_URL, job="etl_load", registry=registry)
-        logger.info(f"Metrics pushed to Pushgateway ({PUSHGATEWAY_URL}) for job 'etl_load'.")
+        logger.info(
+            f"Metrics pushed to Pushgateway ({PUSHGATEWAY_URL}) for job 'etl_load'.")
     except Exception as e:
         logger.warning(f"Failed to push metrics to Pushgateway: {e}")
 
 
 def _push_noop_metrics() -> None:
     """Heartbeat push when load is skipped (no-op)."""
-    registry        = CollectorRegistry()
+    registry = CollectorRegistry()
     last_success_ts = Gauge(
         "etl_load_last_success_timestamp",
         "Unix timestamp of the last successful load run",
@@ -208,31 +281,36 @@ def _push_noop_metrics() -> None:
 
 # ── Core load logic ────────────────────────────────────────────────────────
 
-def run_load(processed_dir: str) -> None:
-    """Read all aggregated Parquet datasets and write them to PostgreSQL."""
+def run_load(processed_dir: str, only: list[tuple[str, str]] | None = None) -> None:
+    """
+    Read aggregated Parquet datasets and write them to PostgreSQL.
+    If *only* is given, restrict to those (dataset, taxi_type) pairs.
+    After each successful upsert the dir mtime is recorded in Redis so it
+    won't be re-loaded by the cron unless the data changes again.
+    """
     run_start = time.time()
     logger.info("=== Starting load ===")
 
     # ── Prometheus metrics ─────────────────────────────────────────────────
-    registry        = CollectorRegistry()
-    rows_loaded     = Gauge(
+    registry = CollectorRegistry()
+    rows_loaded = Gauge(
         "etl_load_rows_loaded_total",
         "Number of rows upserted per dataset and taxi type",
         ["dataset", "taxi_type"],
         registry=registry,
     )
-    load_duration   = Gauge(
+    load_duration = Gauge(
         "etl_load_duration_seconds",
         "Load duration per dataset and taxi type in seconds",
         ["dataset", "taxi_type"],
         registry=registry,
     )
-    total_duration  = Gauge(
+    total_duration = Gauge(
         "etl_load_total_duration_seconds",
         "Total load run duration in seconds",
         registry=registry,
     )
-    failures        = Gauge(
+    failures = Gauge(
         "etl_load_failures_total",
         "Number of dataset/taxi_type combinations that failed to load",
         registry=registry,
@@ -250,15 +328,23 @@ def run_load(processed_dir: str) -> None:
         conn = get_pg_conn()
         ensure_schema(conn)
 
+        only_set = set(only) if only is not None else None
+
         for dataset, (table, pk_cols) in DATASETS.items():
             dataset_dir = Path(processed_dir) / dataset
-            taxi_types = sorted([d.name for d in dataset_dir.iterdir() if d.is_dir()]) if dataset_dir.exists() else []
+            taxi_types = sorted([d.name for d in dataset_dir.iterdir(
+            ) if d.is_dir()]) if dataset_dir.exists() else []
             if not taxi_types:
-                logger.info(f"No taxi type subdirs found under {dataset_dir}, skipping.")
+                logger.info(
+                    f"No taxi type subdirs found under {dataset_dir}, skipping.")
                 continue
             for taxi_type in taxi_types:
+                if only_set is not None and (dataset, taxi_type) not in only_set:
+                    logger.debug(
+                        f"Skipping {dataset}/{taxi_type} (not pending).")
+                    continue
                 src = Path(processed_dir) / dataset / taxi_type
-                t0  = time.time()
+                t0 = time.time()
                 try:
                     df = read_parquet_dir(src)
                     if df is None:
@@ -267,13 +353,18 @@ def run_load(processed_dir: str) -> None:
 
                     n = upsert_dataframe(conn, df, table, pk_cols)
                     elapsed = time.time() - t0
-                    rows_loaded.labels(dataset=dataset, taxi_type=taxi_type).set(n)
-                    load_duration.labels(dataset=dataset, taxi_type=taxi_type).set(elapsed)
-                    logger.info(f"Loaded {n:,} rows → {table} [{taxi_type}] ({elapsed:.1f}s)")
+                    rows_loaded.labels(
+                        dataset=dataset, taxi_type=taxi_type).set(n)
+                    load_duration.labels(
+                        dataset=dataset, taxi_type=taxi_type).set(elapsed)
+                    logger.info(
+                        f"Loaded {n:,} rows → {table} [{taxi_type}] ({elapsed:.1f}s)")
+                    _mark_dir_loaded(dataset, taxi_type, src)
 
                 except Exception as e:
                     failure_count += 1
-                    logger.error(f"Failed to load {dataset}/{taxi_type}: {e}", exc_info=True)
+                    logger.error(
+                        f"Failed to load {dataset}/{taxi_type}: {e}", exc_info=True)
                     if conn:
                         conn.rollback()
 
@@ -317,7 +408,8 @@ def publish_loaded(payload: dict) -> None:
                 properties=pika.BasicProperties(delivery_mode=2),
             )
             connection.close()
-            logger.info(f"Published to exchange '{RABBITMQ_L_EXCHANGE}': {payload}")
+            logger.info(
+                f"Published to exchange '{RABBITMQ_L_EXCHANGE}': {payload}")
             return
         except Exception as e:
             logger.warning(f"RabbitMQ publish attempt {attempt}/5 failed: {e}")
@@ -333,14 +425,24 @@ def on_message(ch, method, properties, body) -> None:
         payload = json.loads(body)
         logger.info(f"Received message: {payload}")
 
-        processed_dir = payload.get("path", PROCESSED_DATA_DIR)
-        run_load(processed_dir)
+        _timestamp_ = payload.get("timestamp", "N/A")
+        _event_ = payload.get("event", "N/A")
+        _summary_ = payload.get("summary", {})
+        logger.info(
+            f" ({_timestamp_}) - Processing event: {_event_} with {_summary_}.")
 
-        publish_loaded({
-            "event": "load_complete",
-            "path": processed_dir,
-            "action": "model_update",
-        })
+        if r.get(f"{REDIS_TRACKING_ROOT}:{REDIS_LOADED_FLAG}") == "1":
+            run_load(PROCESSED_DATA_DIR)
+            r.set(f"{REDIS_TRACKING_ROOT}:{REDIS_LOADED_FLAG}", "0")
+            publish_loaded({
+                "timestamp":    datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC"),
+                "event":        "data_loaded",
+                "triggered_by": "Load stage",
+                "summary":      "Data loaded successfully to PostgreSQL",
+            })
+        else:
+            logger.info("Redis flag not set, skipping load.")
+            _push_noop_metrics()
 
         ch.basic_ack(delivery_tag=method.delivery_tag)
 
@@ -380,7 +482,74 @@ def start_consumer() -> None:
     sys.exit(1)
 
 
+# ── Scheduled load job ────────────────────────────────────────────────────
+
+def scheduled_load() -> None:
+    """Cron-triggered load: only loads dataset/taxi_type dirs modified since last load."""
+    logger.info("[CRON] Scheduled load triggered — checking for pending dirs.")
+    try:
+        pending = find_pending_dirs(PROCESSED_DATA_DIR)
+        if not pending:
+            logger.info("[CRON] All dirs already up-to-date, nothing to load.")
+            _push_noop_metrics()
+            return
+        logger.info(f"[CRON] {len(pending)} pending dir(s): {pending}")
+        run_load(PROCESSED_DATA_DIR, only=pending)
+        r.set(f"{REDIS_TRACKING_ROOT}:{REDIS_LOADED_FLAG}", "0")
+        publish_loaded({
+            "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC"),
+            "event": "data_loaded",
+            "summary": f"Loaded {len(pending)} pending dataset(s) to PostgreSQL (scheduled)",
+        })
+    except Exception as e:
+        logger.error(f"[CRON] Scheduled load failed: {e}", exc_info=True)
+
+
 # ── Entry point ────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    start_consumer()
+    # On startup: ensure the loaded_dirs key is a hash (not a leftover string).
+    _dirs_key = f"{REDIS_TRACKING_ROOT}:{REDIS_LOADED_DIRS_HASH}"
+    try:
+        key_type = r.type(_dirs_key)
+        if key_type not in ("hash", "none"):
+            logger.warning(
+                f"Redis key '{_dirs_key}' has wrong type '{key_type}', deleting it."
+            )
+            r.delete(_dirs_key)
+    except Exception as e:
+        logger.error(f"Error checking Redis key type for '{_dirs_key}': {e}", exc_info=True)
+
+    # On startup: check Redis in case we missed the RabbitMQ message while down.
+    try:
+        if r.get(f"{REDIS_TRACKING_ROOT}:{REDIS_LOADED_FLAG}") == "1":
+            logger.info(
+                "Transformed data ready flag found in Redis on startup, running load.")
+            run_load(PROCESSED_DATA_DIR)
+            r.set(f"{REDIS_TRACKING_ROOT}:{REDIS_LOADED_FLAG}", "0")
+    except Exception as e:
+        logger.error(
+            f"Error checking Redis for loaded flag: {e}", exc_info=True)
+
+    # RabbitMQ consumer runs in a daemon thread so the BlockingScheduler
+    # can own the main thread.
+    consumer_thread = threading.Thread(
+        target=start_consumer, daemon=True, name="rabbitmq-consumer"
+    )
+    consumer_thread.start()
+
+    # Daily cron: load all processed data into PostgreSQL.
+    scheduler = BlockingScheduler(timezone="UTC")
+    scheduler.add_job(
+        scheduled_load,
+        trigger=CronTrigger(hour=LOAD_CRON_HOUR, minute=LOAD_CRON_MINUTE),
+        name="daily_load",
+        misfire_grace_time=3600,
+    )
+    logger.info(
+        f"Scheduler started — daily load at {LOAD_CRON_HOUR}:{LOAD_CRON_MINUTE:02d} UTC."
+    )
+    try:
+        scheduler.start()
+    except (KeyboardInterrupt, SystemExit):
+        logger.info("Scheduler stopped.")

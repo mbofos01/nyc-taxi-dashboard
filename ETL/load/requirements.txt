@@ -3,3 +3,5 @@ pandas==3.0.1
 pyarrow==19.0.0
 psycopg2-binary==2.9.10
 prometheus_client==0.20.0
+redis==7.2.0
+apscheduler==3.11.0
