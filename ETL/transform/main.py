@@ -123,6 +123,10 @@ def get_spark() -> SparkSession:
         # reach it by container name over the Docker bridge network.
         .config("spark.driver.host", "transform")
         .config("spark.driver.bindAddress", "0.0.0.0")
+        # Pin executor block manager to a fixed port — prevents FetchFailedException
+        # caused by stale random ephemeral ports in the driver's MapOutputTracker
+        # cache after a worker restart in Docker.
+        .config("spark.blockManager.port", "7078")
         .getOrCreate()
     )
     spark.sparkContext.setLogLevel("WARN")

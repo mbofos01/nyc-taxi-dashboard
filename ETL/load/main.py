@@ -431,7 +431,7 @@ def publish_loaded(payload: dict) -> None:
 
 
 def on_message(ch, method, properties, body) -> None:
-    """Callback triggered when a message arrives on etl.transformed."""
+    """Callback triggered when a message arrives on the command queue."""
     try:
         payload = json.loads(body)
         logger.info(f"Received message: {payload}")

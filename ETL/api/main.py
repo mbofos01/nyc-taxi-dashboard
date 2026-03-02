@@ -180,7 +180,7 @@ def health():
     response_model=TriggerResponse,
     tags=["triggers"],
     summary="Trigger the extract service",
-    description="Publishes a run command to the extract command queue.",
+    description=f"Publishes a run command to the extract command queue ({RABBITMQ_CMD_EXTRACT}).",
 )
 def trigger_extract():
     _publish(
@@ -206,7 +206,7 @@ def trigger_extract():
     tags=["triggers"],
     summary="Trigger the transform service",
     description=(
-        "Publishes a pipeline event to etl.extracted. "
+        f"Publishes a pipeline event to {RABBITMQ_E_QUEUE}. "
         "Transform picks it up and processes any pending files via Redis-tracked state."
     ),
 )
@@ -234,7 +234,7 @@ def trigger_transform():
     tags=["triggers"],
     summary="Trigger the load service",
     description=(
-        "Publishes a pipeline event to etl.transformed. "
+        f"Publishes a pipeline event to {RABBITMQ_T_QUEUE}. "
         "Load picks it up and loads all pending data via Redis-tracked state."
     ),
 )
@@ -336,7 +336,7 @@ def invalidate_transform():
     tags=["invalidation"],
     summary="Invalidate Load step",
     description=(
-        f"Deletes the loaded-dirs hash (`{REDIS_TRACKING_ROOT}:{REDIS_LOADED_DIRS_HASH}`) so the cron will "
+        f"Deletes the `{REDIS_TRACKING_ROOT}:{REDIS_LOADED_DIRS_HASH}` hash so the cron will "
         "treat every processed dir as pending, and sets "
         f"`{REDIS_TRACKING_ROOT}:{REDIS_LOADED_FLAG}` to `1` so the message-triggered path will also run. "
         "Both load paths will re-load all data on their next execution."
@@ -362,7 +362,7 @@ def invalidate_load():
     tags=["invalidation"],
     summary="Invalidate entire pipeline",
     description=(
-        "Nuclear reset: clears the `processed_files` set and `loaded_dirs` hash from Redis, "
+        f"Nuclear reset: clears the `{REDIS_TRACKING_ROOT}:{REDIS_PROCESSED_SET}` set and `{REDIS_TRACKING_ROOT}:{REDIS_LOADED_DIRS_HASH}` hash from Redis, "
         f"sets `{REDIS_TRACKING_ROOT}:{REDIS_LOADED_FLAG}` to `1`, "
         f"and wipes both `{PROCESSED_DATA_DIR}` and `{RAW_DATA_DIR}`. "
         "Every stage — extract, transform, and load — will fully re-run from scratch."

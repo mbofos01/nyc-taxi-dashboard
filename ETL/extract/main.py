@@ -28,10 +28,10 @@ logger = logging.getLogger(__name__)
 TLC_BASE_URL = os.getenv("TLC_BASE_URL")
 RAW_DATA_DIR = os.getenv("RAW_DATA_DIR")
 LOG_DIR = os.getenv("LOG_DIR")
-SERVER_TIMEOUT = int(os.getenv("SERVER_TIMEOUT", 15))  # seconds
-START_YEAR = int(os.getenv("START_YEAR", 2019))  # 2019
-START_MONTH = int(os.getenv("START_MONTH", 1))
-START_DAY = int(os.getenv("START_DAY", 1))
+SERVER_TIMEOUT = int(os.getenv("SERVER_TIMEOUT"))  # seconds
+START_YEAR = int(os.getenv("START_YEAR"))  # 2019
+START_MONTH = int(os.getenv("START_MONTH"))
+START_DAY = int(os.getenv("START_DAY"))
 # START_DATE = date(2019, 1, 1)
 START_DATE = date(START_YEAR, START_MONTH, START_DAY)
 # TAXI_TYPES = ["yellow", "green", "fhv", "fhvhv"]
@@ -42,11 +42,11 @@ RABBITMQ_PORT = int(os.getenv("RABBITMQ_PORT"))
 RABBITMQ_USER = os.getenv("RABBITMQ_USER")
 RABBITMQ_PASSWORD = os.getenv("RABBITMQ_PASSWORD")
 RABBITMQ_QUEUE = os.getenv("RABBITMQ_E_QUEUE")
-RABBITMQ_CMD_QUEUE = os.getenv("RABBITMQ_CMD_EXTRACT", "etl.cmd.extract")
+RABBITMQ_CMD_QUEUE = os.getenv("RABBITMQ_CMD_EXTRACT")
 PUSHGATEWAY_URL = os.getenv("PUSHGATEWAY_URL")
 
-CRON_DAY = os.getenv("EXTRACT_CRON_DAY", "15")  # day-of-month to run
-CRON_HOUR = os.getenv("EXTRACT_CRON_HOUR", "2")  # UTC hour to run
+CRON_DAY = os.getenv("EXTRACT_CRON_DAY")  # day-of-month to run
+CRON_HOUR = os.getenv("EXTRACT_CRON_HOUR")  # UTC hour to run
 
 
 # ── Download result ────────────────────────────────────────────────────────

@@ -27,16 +27,16 @@ services:
     build:
       context: ETL/api
       args:
-        API_PORT: ${API_PORT:-8000}
+        API_PORT: ${ETL_API_PORT:-8000}
     container_name: etl-api-service
     restart: unless-stopped
     volumes:
       - ./ETL/api:/app
       - taxi_raw_data:${RAW_DATA_DIR:-/data/raw}
       - taxi_processed_data:${PROCESSED_DATA_DIR:-/data/processed}
-    command: ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "${API_PORT:-8000}", "--reload"]
+    command: ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "${ETL_API_PORT:-8000}", "--root-path", "/${ETL_API_HOST:-etl-api}", "--reload"]
     ports:
-      - "${API_PORT:-8000}:${API_PORT:-8000}"
+      - "${ETL_API_PORT:-8000}:${ETL_API_PORT:-8000}"
     env_file: .env
     depends_on:
       rabbitMQ:
@@ -83,8 +83,6 @@ services:
       - taxi_processed_data:${PROCESSED_DATA_DIR:-/data/processed}
     command: ["python", "main.py"]
     env_file: .env
-    environment:
-      - SPARK_MASTER_URL=spark://spark-master:7077
     depends_on:
       rabbitMQ:
         condition: service_healthy
@@ -157,15 +155,19 @@ services:
     command: ["/opt/spark/bin/spark-class", "org.apache.spark.deploy.master.Master"]
     environment:
       - SPARK_NO_DAEMONIZE=true
-      - SPARK_MASTER_HOST=spark-master
+      - SPARK_MASTER_HOST=${SPARK_MASTER_HOST}
       - SPARK_LOG_LEVEL=WARN
+    expose:
+      - "7078"  # Block manager port for shuffle service; must be exposed for inter-worker communication in Docker
+      - "${SPARK_MASTER_UI_PORT}"
+      - "${SPARK_MASTER_PORT}"
     ports:
-      - "8080:8080"
-      - "7077:7077"
+      - "${SPARK_MASTER_UI_PORT}:${SPARK_MASTER_UI_PORT}"
+      - "${SPARK_MASTER_PORT}:${SPARK_MASTER_PORT}"
     networks:
       - etl-network
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080"]
+      test: ["CMD", "curl", "-f", "http://localhost:${SPARK_MASTER_UI_PORT}"]
       interval: 15s
       timeout: 10s
       retries: 5
@@ -179,17 +181,17 @@ services:
     image: apache/spark:3.5.1
     user: root
     restart: unless-stopped
-    command: ["/opt/spark/bin/spark-class", "org.apache.spark.deploy.worker.Worker", "spark://spark-master:7077"]
+    command: ["/opt/spark/bin/spark-class", "org.apache.spark.deploy.worker.Worker", "${SPARK_MASTER_URL}"]
     environment:
       - SPARK_NO_DAEMONIZE=true
-      - SPARK_WORKER_MEMORY=4g
-      - SPARK_WORKER_CORES=2
+      - SPARK_WORKER_MEMORY=${SPARK_WORKER_MEMORY:-4g}
+      - SPARK_WORKER_CORES=${SPARK_WORKER_CORES:-2}
       - PYSPARK_PYTHON=python3
       - SPARK_LOG_LEVEL=WARN
     volumes:
-      - taxi_raw_data:/data/raw
-      - taxi_processed_data:/data/processed
-      - taxi_models_data:/data/models
+      - taxi_raw_data:${RAW_DATA_DIR:-/data/raw}
+      - taxi_processed_data:${PROCESSED_DATA_DIR:-/data/processed}
+      - taxi_models_data:${MODELS_DIR:-/data/models}
     depends_on:
       spark-master:
         condition: service_healthy
@@ -212,10 +214,11 @@ services:
     environment:
       - RABBITMQ_SERVER_ADDITIONAL_ERL_ARGS=-rabbit log [{console,[{level,warning}]}]
     ports:
-      - "5672:5672"
-      - "15672:15672"
+      - "${RABBITMQ_PORT}:${RABBITMQ_PORT}"
+    # 15672 is now exposed via nginx at /rabbitmq/
     volumes:
       - rabbitmq_data:/var/lib/rabbitmq
+      - ./rabbitmq/rabbitmq.conf:/etc/rabbitmq/rabbitmq.conf:ro
     networks:
       - etl-network
     healthcheck:
@@ -243,7 +246,7 @@ services:
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-nyc}
     command: ["postgres", "-c", "logging_collector=off", "-c", "log_statement=none", "-c", "log_min_messages=fatal"]
     ports:
-      - "5432:5432"
+      - "${POSTGRES_PORT}:${POSTGRES_PORT}"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     networks:
@@ -265,7 +268,7 @@ services:
     restart: unless-stopped
     command: ["redis-server", "--loglevel", "warning"]
     ports:
-      - "6379:6379"
+      - "${REDIS_PORT}:${REDIS_PORT}"
     volumes:
       - redis_data:/data
     networks:
@@ -288,10 +291,10 @@ services:
     image: prom/pushgateway:v1.9.0
     container_name: pushgateway-service
     restart: unless-stopped
-    ports:
-      - "9091:9091"
+    # ${PUSHGATEWAY_PORT} is exposed via nginx at /pushgateway/
     command:
       - "--log.level=warn"
+      - "--web.listen-address=:${PUSHGATEWAY_PORT}"
     networks:
       - etl-network      # receives pushes from ETL batch jobs
       - storage-network  # scraped by prometheus
@@ -305,16 +308,21 @@ services:
     image: prom/prometheus:v2.52.0
     container_name: prometheus-service
     restart: unless-stopped
-    ports:
-      - "9090:9090"
+    # ${PROMETHEUS_PORT} is exposed via nginx at /prometheus/
+    env_file: .env
+    entrypoint: ["/bin/sh", "/etc/prometheus/entrypoint.sh"]
     volumes:
-      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./monitoring/prometheus/entrypoint.sh:/etc/prometheus/entrypoint.sh:ro
+      - ./monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml.template:ro
       - prometheus_data:/prometheus
     command:
-      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--config.file=/tmp/prometheus.yml"
       - "--storage.tsdb.path=/prometheus"
       - "--storage.tsdb.retention.time=30d"
       - "--log.level=warn"
+      - "--web.listen-address=:${PROMETHEUS_PORT}"
+      - "--web.external-url=http://${NGINX_HOST:-localhost}/prometheus/"
+      - "--web.route-prefix=/prometheus"
     networks:
       - storage-network
     x-wharfmap:
@@ -327,14 +335,16 @@ services:
     image: grafana/grafana:10.4.3
     container_name: grafana-service
     restart: unless-stopped
-    ports:
-      - "3000:3000"
+    # 3000 is now exposed via nginx at /grafana/
+    env_file: .env
     environment:
       - GF_SECURITY_ADMIN_USER=${GRAFANA_ADMIN_USER:-admin}
       - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-admin}
       - GF_USERS_ALLOW_SIGN_UP=false
       - GF_LOG_LEVEL=warn
       - GF_LOG_MODE=console
+      - GF_SERVER_ROOT_URL=%(protocol)s://%(domain)s/grafana/
+      - GF_SERVER_SERVE_FROM_SUB_PATH=true
     volumes:
       - grafana_data:/var/lib/grafana
       - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
@@ -346,30 +356,57 @@ services:
       border-width: "1px"
       border-style: "dashed"
 
-  # ── API + Dashboard (planned) ─────────────────────────────────────────────
-  # api:
-  #   build: api/
-  #   container_name: api-service
-  #   depends_on:
-  #     postgres:
-  #       condition: service_healthy
-  #     redis:
-  #       condition: service_healthy
-  #   ports:
-  #     - "8000:8000"
-  #   networks:
-  #     - storage-network   # reads postgres + redis
-  #     - etl-network       # subscribes to model.trained events via rabbitmq
+  # ── Reverse proxy ──────────────────────────────────────────────────────────
 
-  # dashboard:
-  #   build: dashboard/
-  #   container_name: dashboard-service
-  #   depends_on:
-  #     - api
-  #   ports:
-  #     - "8050:8050"
-  #   networks:
-  #     - storage-network
+  nginx:
+    image: nginx:1.27-alpine
+    container_name: nginx-proxy
+    restart: unless-stopped
+    ports:
+      - "${NGINX_PORT:-80}:80"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/templates/default.conf.template:ro
+    env_file: .env
+    depends_on:
+      - grafana
+      - prometheus
+      - pushgateway
+      - rabbitMQ
+      - etl-api
+      - spark-master
+    networks:
+      - etl-network      # rabbitMQ, pushgateway, etl-api, spark-master
+      - storage-network  # grafana, prometheus
+    x-wharfmap:
+      color: "#009900"
+      border-color: "#005500"
+      border-width: "3px"
+      border-style: "solid"
+
+# ── API + Dashboard (planned) ─────────────────────────────────────────────
+# api:
+#   build: api/
+#   container_name: api-service
+#   depends_on:
+#     postgres:
+#       condition: service_healthy
+#     redis:
+#       condition: service_healthy
+#   ports:
+#     - "8000:8000"
+#   networks:
+#     - storage-network   # reads postgres + redis
+#     - etl-network       # subscribes to model.trained events via rabbitmq
+
+# dashboard:
+#   build: dashboard/
+#   container_name: dashboard-service
+#   depends_on:
+#     - api
+#   ports:
+#     - "8050:8050"
+#   networks:
+#     - storage-network
 
 volumes:
   rabbitmq_data:
