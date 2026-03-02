@@ -1,5 +1,7 @@
 # NYC Taxi AI Dashboard
 
+[![CI](https://github.com/mbofos01/nyc-taxi-dashboard/workflows/CI/badge.svg)](https://github.com/mbofos01/nyc-taxi-dashboard/actions)
+
 An AI-powered analytics dashboard built on NYC TLC taxi data (2019–present), featuring real-time aggregations, ML model predictions, and interactive visualizations.
 
 ---
@@ -89,6 +91,22 @@ All queues and the fanout exchange are durable — messages survive broker resta
 ---
 
 ## Services
+
+### ✅ Nginx (`nginx/`)
+
+Reverse proxy service routing external requests to internal services under sub-paths:
+
+- `/health` — health check endpoint returning "ok"
+- `/etl-api/` — proxies to ETL Control API (FastAPI)
+- `/spark/` — proxies to Spark Master UI with URL rewriting for assets
+- `/grafana/` — proxies to Grafana dashboards
+- `/prometheus/` — proxies to Prometheus metrics
+- `/pushgateway/` — proxies to Prometheus Pushgateway with URL rewriting
+- `/rabbitmq/` — proxies to RabbitMQ Management UI
+
+Configuration uses environment variable substitution at container startup. WebSocket support enabled for Grafana Live.
+
+---
 
 ### ✅ ETL Control API (`ETL/api/`)
 
@@ -246,53 +264,75 @@ Dual-trigger design — two independent paths ensure no data is missed:
 All services are configured via a `.env` file in the project root. Create one by copying the template below:
 
 ```dotenv
-# ── API ────────────────────────────────────────────────────────────────────
-API_PORT=8000
+# ── Extract: source & HTTP ─────────────────────────────────────────────────
+TLC_BASE_URL="https://d37ci6vzurychx.cloudfront.net/trip-data"
+SERVER_TIMEOUT=15 # seconds
 
-# ── Data paths ─────────────────────────────────────────────────────────────
-RAW_DATA_DIR=/data/raw
-PROCESSED_DATA_DIR=/data/processed
-MODELS_DIR=/data/models
-LOG_DIR=/data/logs
-
-# ── TLC Extract ────────────────────────────────────────────────────────────
-TLC_BASE_URL=https://d37ci6vzurychx.cloudfront.net/trip-data/
-SERVER_TIMEOUT=15
-START_YEAR=2019
-START_MONTH=1
+# ── Extract: start date ────────────────────────────────────────────────────
+START_YEAR=2025
+START_MONTH=9
 START_DAY=1
+
+# ── Scheduler: extract (monthly) ──────────────────────────────────────────
 EXTRACT_CRON_DAY=15
-EXTRACT_CRON_HOUR=2
+EXTRACT_CRON_HOUR=3
 
-# ── Transform ──────────────────────────────────────────────────────────────
-TRANSFORM_CRON_HOUR=3
-TRANSFORM_CRON_MINUTE=0
+# ── Scheduler: transform (daily) ──────────────────────────────────────────
+TRANSFORM_CRON_HOUR=2
+TRANSFORM_CRON_MINUTE=10
 
-# ── Load ───────────────────────────────────────────────────────────────────
-LOAD_CRON_HOUR=4
-LOAD_CRON_MINUTE=0
+# ── Scheduler: load (daily) ───────────────────────────────────────────────
+LOAD_CRON_HOUR=3
+LOAD_CRON_MINUTE=30
 
-# ── RabbitMQ ───────────────────────────────────────────────────────────────
+# ── RabbitMQ ──────────────────────────────────────────────────────────────
 RABBITMQ_HOST=rabbitmq
 RABBITMQ_PORT=5672
 RABBITMQ_DEFAULT_USER=guest
 RABBITMQ_DEFAULT_PASS=guest
 RABBITMQ_USER=guest
 RABBITMQ_PASSWORD=guest
-RABBITMQ_CMD_EXTRACT=etl.cmd.extract
 RABBITMQ_E_QUEUE=etl.extracted
 RABBITMQ_T_QUEUE=etl.transformed
 RABBITMQ_L_EXCHANGE=etl.loaded
+RABBITMQ_CMD_EXTRACT=etl.cmd.extract
+RABBITMQ_LOGS="/dev/null"
+RABBITMQ_LOG_LEVEL="none"
 
-# ── Redis ──────────────────────────────────────────────────────────────────
-REDIS_HOST=redis
-REDIS_PORT=6379
-REDIS_TRACKING_ROOT=spark
-REDIS_PROCESSED_SET=processed_files
-REDIS_LOADED_FLAG=loaded_flag
-REDIS_LOADED_DIRS_HASH=loaded_dirs
-REDIS_MODEL_ROOT=model
-REDIS_FARE_MODEL_KEY=fare
+# ── Data directories ───────────────────────────────────────────────────────
+RAW_DATA_DIR="/data/raw"
+PROCESSED_DATA_DIR="/data/processed"
+MODELS_DIR="/data/models"
+LOG_DIR="logs"
+
+# ── Spark ──────────────────────────────────────────────────────────────────
+SPARK_MASTER_URL=spark://spark-master:7077
+SPARK_MASTER_PORT=7077
+SPARK_WORKER_MEMORY=4g
+SPARK_WORKER_CORES=2
+
+# ── Nginx ─────────────────────────────────────────────────────────────────
+NGINX_PORT=80
+NGINX_HOST=localhost
+GRAFANA_HOST=grafana
+GRAFANA_PORT=3000
+PROMETHEUS_HOST=prometheus
+PROMETHEUS_PORT=4567
+PUSHGATEWAY_HOST=pushgateway
+PUSHGATEWAY_PORT=1234
+RABBITMQ_MGMT_HOST=rabbitMQ
+RABBITMQ_MGMT_PORT=15672
+ETL_API_HOST=etl-api
+ETL_API_PORT=7999
+SPARK_MASTER_HOST=spark-master
+SPARK_MASTER_UI_PORT=8080
+
+# ── Prometheus Pushgateway ─────────────────────────────────────────────────
+PUSHGATEWAY_URL=http://pushgateway:1234
+
+# ── Grafana ────────────────────────────────────────────────────────────────
+GF_SECURITY_ADMIN_USER=admin
+GF_SECURITY_ADMIN_PASSWORD=admin
 
 # ── PostgreSQL ─────────────────────────────────────────────────────────────
 POSTGRES_HOST=postgres
@@ -301,12 +341,15 @@ POSTGRES_DB=nyc_taxi
 POSTGRES_USER=nyc
 POSTGRES_PASSWORD=nyc
 
-# ── Grafana ────────────────────────────────────────────────────────────────
-GRAFANA_ADMIN_USER=admin
-GRAFANA_ADMIN_PASSWORD=admin
-
-# ── Observability ──────────────────────────────────────────────────────────
-PUSHGATEWAY_URL=http://pushgateway:9091
+# ── Redis ──────────────────────────────────────────────────────────────────
+REDIS_HOST=redis
+REDIS_PORT=6379
+REDIS_TRACKING_ROOT="spark"
+REDIS_PROCESSED_SET="processed_files"
+REDIS_LOADED_FLAG="loaded_flag"
+REDIS_LOADED_DIRS_HASH="loaded_dirs"
+REDIS_MODEL_ROOT="model"
+REDIS_FARE_MODEL_KEY="fare"
 ```
 
 ### Field Reference
@@ -318,7 +361,7 @@ PUSHGATEWAY_URL=http://pushgateway:9091
 | `RAW_DATA_DIR` | `/data/raw` | Mount path for raw Parquet files downloaded by Extract |
 | `PROCESSED_DATA_DIR` | `/data/processed` | Mount path for aggregated Parquet outputs written by Transform |
 | `MODELS_DIR` | `/data/models` | Mount path for trained model artifacts written by model services |
-| `LOG_DIR` | `/data/logs` | Mount path for service log files (Extract, Transform) |
+| `LOG_DIR` | `logs` | Directory for service log files (Extract, Transform) |
 
 #### Extract
 
@@ -326,31 +369,60 @@ PUSHGATEWAY_URL=http://pushgateway:9091
 | --- | --- | --- |
 | `TLC_BASE_URL` | *(required)* | Base CDN URL for TLC Parquet files |
 | `SERVER_TIMEOUT` | `15` | HTTP request timeout in seconds when downloading from TLC |
-| `START_YEAR` | `2019` | First year to include in the download window |
-| `START_MONTH` | `1` | First month to include in the download window |
+| `START_YEAR` | `2025` | First year to include in the download window |
+| `START_MONTH` | `9` | First month to include in the download window |
 | `START_DAY` | `1` | First day to include in the download window |
 | `EXTRACT_CRON_DAY` | `15` | Day of the month the monthly refresh cron runs |
-| `EXTRACT_CRON_HOUR` | `2` | UTC hour the monthly refresh cron runs |
+| `EXTRACT_CRON_HOUR` | `3` | UTC hour the monthly refresh cron runs |
 
 #### Transform
 
 | Variable | Default | Description |
 | --- | --- | --- |
-| `TRANSFORM_CRON_HOUR` | *(required)* | UTC hour the daily catch-up cron runs |
-| `TRANSFORM_CRON_MINUTE` | *(required)* | Minute past the hour the daily catch-up cron runs |
+| `TRANSFORM_CRON_HOUR` | `2` | UTC hour the daily catch-up cron runs |
+| `TRANSFORM_CRON_MINUTE` | `10` | Minute past the hour the daily catch-up cron runs |
 
 #### Load
 
 | Variable | Default | Description |
 | --- | --- | --- |
-| `LOAD_CRON_HOUR` | *(required)* | UTC hour the daily load cron runs |
-| `LOAD_CRON_MINUTE` | *(required)* | Minute past the hour the daily load cron runs |
+| `LOAD_CRON_HOUR` | `3` | UTC hour the daily load cron runs |
+| `LOAD_CRON_MINUTE` | `30` | Minute past the hour the daily load cron runs |
 
-#### API
+#### Spark
 
 | Variable | Default | Description |
 | --- | --- | --- |
-| `API_PORT` | `8000` | Port the ETL Control API listens on |
+| `SPARK_MASTER_URL` | `spark://spark-master:7077` | Spark cluster master URL |
+| `SPARK_MASTER_PORT` | `7077` | Port of the Spark Master |
+| `SPARK_WORKER_MEMORY` | `4g` | Memory allocated to each Spark worker |
+| `SPARK_WORKER_CORES` | `2` | CPU cores allocated to each Spark worker |
+
+#### Nginx
+
+| Variable | Default | Description |
+| --- | --- | --- |
+| `NGINX_PORT` | `80` | Port Nginx listens on externally |
+| `NGINX_HOST` | `localhost` | External hostname for Nginx (used in CI validation) |
+| `ETL_API_HOST` | `etl-api` | Hostname of the ETL Control API service |
+| `ETL_API_PORT` | `7999` | Port of the ETL Control API service |
+| `SPARK_MASTER_HOST` | `spark-master` | Hostname of the Spark Master service |
+| `SPARK_MASTER_UI_PORT` | `8080` | Port of the Spark Master UI |
+| `GRAFANA_HOST` | `grafana` | Hostname of the Grafana service |
+| `GRAFANA_PORT` | `3000` | Port of the Grafana service |
+| `PROMETHEUS_HOST` | `prometheus` | Hostname of the Prometheus service |
+| `PROMETHEUS_PORT` | `4567` | Port of the Prometheus service |
+| `PUSHGATEWAY_HOST` | `pushgateway` | Hostname of the Prometheus Pushgateway service |
+| `PUSHGATEWAY_PORT` | `1234` | Port of the Prometheus Pushgateway service |
+| `RABBITMQ_MGMT_HOST` | `rabbitMQ` | Hostname of the RabbitMQ service for management UI |
+| `RABBITMQ_MGMT_PORT` | `15672` | Port of the RabbitMQ management UI |
+
+#### ETL API
+
+| Variable | Default | Description |
+| --- | --- | --- |
+| `ETL_API_HOST` | `etl-api` | Hostname of the ETL Control API service |
+| `ETL_API_PORT` | `7999` | Port the ETL Control API listens on |
 
 #### RabbitMQ
 
@@ -366,6 +438,8 @@ PUSHGATEWAY_URL=http://pushgateway:9091
 | `RABBITMQ_E_QUEUE` | `etl.extracted` | Queue for Extract → Transform messages |
 | `RABBITMQ_T_QUEUE` | `etl.transformed` | Queue for Transform → Load messages |
 | `RABBITMQ_L_EXCHANGE` | `etl.loaded` | Fanout exchange for Load → all model services broadcast |
+| `RABBITMQ_LOGS` | `/dev/null` | RabbitMQ log file location |
+| `RABBITMQ_LOG_LEVEL` | `none` | RabbitMQ log level |
 
 > `RABBITMQ_DEFAULT_USER` / `RABBITMQ_DEFAULT_PASS` are consumed by the RabbitMQ image to create the broker's admin account. `RABBITMQ_USER` / `RABBITMQ_PASSWORD` are the credentials the Python client services use to connect — set all four to the same values unless you need separate accounts.
 
@@ -403,7 +477,7 @@ PUSHGATEWAY_URL=http://pushgateway:9091
 
 | Variable | Default | Description |
 | --- | --- | --- |
-| `PUSHGATEWAY_URL` | `http://pushgateway:9091` | Full URL of the Prometheus Pushgateway; used by all ETL and model services to push batch metrics |
+| `PUSHGATEWAY_URL` | `http://pushgateway:1234` | Full URL of the Prometheus Pushgateway; used by all ETL and model services to push batch metrics |
 
 ---
 
@@ -413,8 +487,11 @@ PUSHGATEWAY_URL=http://pushgateway:9091
 # Run full stack
 docker-compose up --build
 
+# Health check
+curl http://localhost/health
+
 # ETL Control API docs
-open http://localhost:8000/redoc
+open http://localhost/etl-api/redoc
 
 # Check downloaded files
 docker exec extract-service find /data/raw -name "*.parquet"
@@ -423,13 +500,19 @@ docker exec extract-service find /data/raw -name "*.parquet"
 docker exec transform-service find /data/processed -name "*.parquet"
 
 # RabbitMQ management UI
-open http://localhost:15672   # guest / guest
+open http://localhost/rabbitmq   # guest / guest
 
 # Grafana dashboards
-open http://localhost:3000    # admin / admin
+open http://localhost/grafana    # admin / admin
+
+# Prometheus metrics
+open http://localhost/prometheus
+
+# Pushgateway
+open http://localhost/pushgateway
 
 # Spark master UI
-open http://localhost:8080
+open http://localhost/spark
 ```
 
 ---
