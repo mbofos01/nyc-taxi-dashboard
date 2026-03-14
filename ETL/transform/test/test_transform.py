@@ -85,9 +85,16 @@ class TestDataLoading:
         mock_spark.read.parquet.assert_called_once_with("test.parquet")
 
     @patch("src.main._is_valid_parquet")
-    def test_load_and_validate_file_invalid_parquet(self, mock_validate):
+    @patch("src.main.SparkSession")
+    def test_load_and_validate_file_invalid_parquet(
+        self, mock_spark_session, mock_validate
+    ):
         """Test loading of invalid parquet file"""
         mock_validate.return_value = False
+
+        # Mock Spark session
+        mock_spark = MagicMock()
+        mock_spark_session.builder.getOrCreate.return_value = mock_spark
 
         result = load_and_validate_file(mock_spark, "invalid.parquet", "yellow")
 
@@ -105,24 +112,39 @@ class TestDataTransformation:
         # For now, we'll mock the DataFrame operations
         pass
 
-    @patch("src.main.SparkSession")
-    def test_normalise_yellow_taxi(self, mock_spark_session):
+    @patch("src.main.F.lit")
+    def test_normalise_yellow_taxi(self, mock_lit):
         """Test normalisation for yellow taxi data"""
         # Mock DataFrame
         mock_df = MagicMock()
         mock_df.withColumnRenamed.return_value = mock_df
         mock_df.withColumn.return_value = mock_df
+        mock_df.select.return_value = mock_df
 
-        with patch("src.main.F") as mock_F:
-            mock_F.lit.return_value = MagicMock()
-            result = normalise(mock_df, "yellow")
+        mock_lit.return_value = MagicMock()
+
+        result = normalise(mock_df, "yellow")
 
         # Verify column operations were called
+        assert mock_df.select.called
         assert mock_df.withColumn.called
+        mock_lit.assert_called_with("yellow")
 
-    def test_normalise_green_taxi(self):
+    @patch("src.main.F.lit")
+    def test_normalise_green_taxi(self, mock_lit):
         """Test normalisation for green taxi data"""
         mock_df = MagicMock()
+        mock_df.withColumnRenamed.return_value = mock_df
+        mock_df.withColumn.return_value = mock_df
+        mock_df.select.return_value = mock_df
+
+        mock_lit.return_value = MagicMock()
+
+        result = normalise(mock_df, "green")
+
+        assert mock_df.select.called
+        assert mock_df.withColumn.called
+        mock_lit.assert_called_with("green")
         mock_df.withColumnRenamed.return_value = mock_df
         mock_df.withColumn.return_value = mock_df
 
@@ -139,23 +161,42 @@ class TestDataTransformation:
         mock_df.filter.return_value = mock_df
         mock_df.withColumn.return_value = mock_df
 
-        # Mock F functions to avoid comparison issues
+        # Mock F functions to return objects that support operations
         mock_col = MagicMock()
         mock_year = MagicMock()
         mock_current_date = MagicMock()
         mock_unix_timestamp = MagicMock()
+        mock_hour = MagicMock()
+        mock_dayofweek = MagicMock()
+        mock_month = MagicMock()
+        mock_to_date = MagicMock()
+        mock_when = MagicMock()
+        mock_otherwise = MagicMock()
 
+        # Set up return values
         mock_F.col.return_value = mock_col
         mock_F.year.return_value = mock_year
         mock_F.current_date.return_value = mock_current_date
         mock_F.unix_timestamp.return_value = mock_unix_timestamp
+        mock_F.hour.return_value = mock_hour
+        mock_F.dayofweek.return_value = mock_dayofweek
+        mock_F.month.return_value = mock_month
+        mock_F.to_date.return_value = mock_to_date
+        mock_F.when.return_value = mock_when
 
-        # Make comparisons work by returning mock column objects
+        # Make operations return mock_col
         mock_year.__ge__ = MagicMock(return_value=mock_col)
         mock_year.__le__ = MagicMock(return_value=mock_col)
         mock_col.__and__ = MagicMock(return_value=mock_col)
         mock_col.__sub__ = MagicMock(return_value=mock_col)
         mock_col.__truediv__ = MagicMock(return_value=mock_col)
+        mock_col.__gt__ = MagicMock(return_value=mock_col)
+        mock_col.__lt__ = MagicMock(return_value=mock_col)
+        mock_col.isNotNull = MagicMock(return_value=mock_col)
+        mock_col.isin = MagicMock(return_value=mock_col)
+        mock_col.between = MagicMock(return_value=mock_col)
+        mock_when.when = MagicMock(return_value=mock_when)
+        mock_when.otherwise = MagicMock(return_value=mock_col)
 
         result = clean(mock_df)
 
@@ -273,11 +314,15 @@ class TestFileProcessing:
 
     @patch("src.main.load_and_validate_file")
     @patch("src.main.get_spark")
-    def test_process_files_load_failure(self, mock_get_spark, mock_load):
+    @patch("src.main.SparkSession")
+    def test_process_files_load_failure(
+        self, mock_spark_session, mock_get_spark, mock_load
+    ):
         """Test file processing when loading fails"""
         mock_load.return_value = None
         mock_spark = MagicMock()
         mock_get_spark.return_value = mock_spark
+        mock_spark_session.builder.getOrCreate.return_value = mock_spark
 
         mock_file = MagicMock()
         mock_file.name = "test.parquet"
@@ -304,18 +349,18 @@ class TestRedisIntegration:
 class TestSparkIntegration:
     """Test cases for Spark operations"""
 
-    @patch("src.main.get_spark")
-    def test_spark_session_creation(self, mock_get_spark):
+    @patch("src.main.SparkSession")
+    def test_spark_session_creation(self, mock_spark_session):
         """Test Spark session creation"""
-        mock_spark = MagicMock()
-        mock_get_spark.return_value = mock_spark
-
         from src.main import get_spark
+
+        mock_spark = MagicMock()
+        mock_spark_session.builder.getOrCreate.return_value = mock_spark
 
         result = get_spark()
 
         assert result == mock_spark
-        mock_get_spark.assert_called_once()
+        mock_spark_session.builder.getOrCreate.assert_called_once()
 
     @patch("src.main.Path")
     @patch("src.main.SparkSession")
@@ -326,11 +371,10 @@ class TestSparkIntegration:
         # Mock Path objects
         mock_out_path = MagicMock()
         mock_tmp_path = MagicMock()
-        mock_path.return_value = mock_out_path
-        mock_out_path.__truediv__ = MagicMock()
-        mock_out_path.__truediv__.side_effect = [mock_out_path, mock_tmp_path]
+        mock_path.side_effect = [mock_out_path, mock_tmp_path]
         mock_out_path.exists.return_value = False
-        mock_tmp_path.exists.return_value = False
+        mock_tmp_path.exists.return_value = True
+        mock_tmp_path.rename = MagicMock()
 
         mock_df = MagicMock()
         mock_writer = MagicMock()
@@ -340,8 +384,9 @@ class TestSparkIntegration:
         write_parquet(mock_df, "test_output", merge=True)
 
         # Verify write operations
-        mock_df.write.mode.assert_called_with("append")
+        mock_df.write.mode.assert_called_with("overwrite")
         mock_writer.parquet.assert_called_once()
+        mock_tmp_path.rename.assert_called_once_with(mock_out_path)
 
 
 class TestMessageHandling:

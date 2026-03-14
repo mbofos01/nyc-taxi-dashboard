@@ -80,7 +80,8 @@ class TestSchemaManagement:
         mock_conn.cursor.assert_called_once()
         # The cursor is used in a context manager, so we need to check the __enter__ result
         mock_cursor.__enter__.assert_called_once()
-        mock_cursor.execute.assert_called_once()
+        # execute is called on the context manager result
+        mock_cursor.__enter__().execute.assert_called_once()
         mock_cursor.__exit__.assert_called_once()
         mock_conn.commit.assert_called_once()
 
@@ -167,7 +168,7 @@ class TestDirectoryTracking:
     def test_is_dir_pending_modified_directory(self, mock_redis):
         """Test pending check for modified directory"""
         # Mock stored mtime as older
-        mock_redis.hget.return_value = "1000000"
+        mock_redis.hget.return_value = "-1"
 
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_path = Path(temp_dir)
@@ -248,15 +249,18 @@ class TestParquetReading:
         mock_df = pd.DataFrame({"col1": [1, 2, 3]})
         mock_read_parquet.return_value = mock_df
 
-        with tempfile.TemporaryDirectory() as temp_dir:
-            temp_path = Path(temp_dir)
+        # Create a mock path with rglob returning files
+        mock_path = MagicMock()
+        mock_path.exists.return_value = True
+        mock_file = MagicMock()
+        mock_path.rglob.return_value = [mock_file]
 
-            result = read_parquet_dir(temp_path)
+        result = read_parquet_dir(mock_path)
 
-            assert result is not None
-            mock_read_parquet.assert_called_once()
+        assert result is not None
+        mock_read_parquet.assert_called_once_with(mock_file)
 
-    @patch("src.main.pd.read_parquet")
+    @patch("ETL.load.src.main.pd.read_parquet")
     def test_read_parquet_dir_empty(self, mock_read_parquet):
         """Test reading empty parquet directory"""
         mock_read_parquet.side_effect = Exception("No files found")
@@ -284,12 +288,12 @@ class TestParquetReading:
 class TestLoadOperations:
     """Test cases for load operations"""
 
-    @patch("src.main.find_pending_dirs")
-    @patch("src.main.read_parquet_dir")
-    @patch("src.main.upsert_dataframe")
-    @patch("src.main._mark_dir_loaded")
-    @patch("src.main.get_pg_conn")
-    @patch("src.main.publish_loaded")
+    @patch("ETL.load.src.main.find_pending_dirs")
+    @patch("ETL.load.src.main.read_parquet_dir")
+    @patch("ETL.load.src.main.upsert_dataframe")
+    @patch("ETL.load.src.main._mark_dir_loaded")
+    @patch("ETL.load.src.main.get_pg_conn")
+    @patch("ETL.load.src.main.publish_loaded")
     def test_run_load_success(
         self,
         mock_publish,
@@ -328,7 +332,7 @@ class TestLoadOperations:
             mock_publish.assert_called_once()
             mock_db_conn.close.assert_called_once()
 
-    @patch("src.main.find_pending_dirs")
+    @patch("ETL.load.src.main.find_pending_dirs")
     def test_run_load_no_pending(self, mock_find):
         """Test load operation when no directories are pending"""
         mock_find.return_value = []
@@ -337,8 +341,8 @@ class TestLoadOperations:
             # Should not raise exception
             run_load(temp_dir)
 
-    @patch("src.main.find_pending_dirs")
-    @patch("src.main.read_parquet_dir")
+    @patch("ETL.load.src.main.find_pending_dirs")
+    @patch("ETL.load.src.main.read_parquet_dir")
     def test_run_load_read_failure(self, mock_read, mock_find):
         """Test load operation when parquet reading fails"""
         mock_find.return_value = [("zone_hourly", "yellow")]
@@ -352,12 +356,12 @@ class TestLoadOperations:
 class TestMessageHandling:
     """Test cases for RabbitMQ message handling"""
 
-    @patch("src.main.pika")
-    @patch("src.main.run_load")
-    @patch("src.main.r")
+    @patch("ETL.load.src.main.pika")
+    @patch("ETL.load.src.main.run_load")
+    @patch("ETL.load.src.main.r")
     def test_on_message_load_trigger(self, mock_redis, mock_run_load, mock_pika):
         """Test message handler for load trigger"""
-        from src.main import on_message
+        from ETL.load.src.main import on_message
 
         mock_ch = MagicMock()
         mock_method = MagicMock()
@@ -375,12 +379,12 @@ class TestMessageHandling:
             mock_redis.set.assert_called_once_with("etl:tracking:loaded_flag", "0")
             mock_ch.basic_ack.assert_called_once()
 
-    @patch("src.main.pika")
-    @patch("src.main.run_load")
-    @patch("src.main.r")
+    @patch("ETL.load.src.main.pika")
+    @patch("ETL.load.src.main.run_load")
+    @patch("ETL.load.src.main.r")
     def test_on_message_load_skip(self, mock_redis, mock_run_load, mock_pika):
         """Test message handler when load should be skipped"""
-        from src.main import on_message
+        from ETL.load.src.main import on_message
 
         mock_ch = MagicMock()
         mock_method = MagicMock()
