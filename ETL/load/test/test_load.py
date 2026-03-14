@@ -7,7 +7,7 @@ import pandas as pd
 import psycopg2
 
 # Import functions from the src directory
-from ETL.load.src.main import (
+from src.main import (
     get_pg_conn,
     ensure_schema,
     upsert_dataframe,
@@ -151,7 +151,7 @@ class TestDirectoryTracking:
             # Empty directory should return 0.0
             assert mtime == 0.0
 
-    @patch("ETL.load.src.main.r")
+    @patch("src.main.r")
     def test_is_dir_pending_new_directory(self, mock_redis):
         """Test pending check for new directory"""
         mock_redis.hget.return_value = None
@@ -164,7 +164,7 @@ class TestDirectoryTracking:
             assert result == True
             mock_redis.hget.assert_called_once()
 
-    @patch("ETL.load.src.main.r")
+    @patch("src.main.r")
     def test_is_dir_pending_modified_directory(self, mock_redis):
         """Test pending check for modified directory"""
         # Mock stored mtime as older
@@ -177,7 +177,7 @@ class TestDirectoryTracking:
 
             assert result == True
 
-    @patch("ETL.load.src.main.r")
+    @patch("src.main.r")
     def test_is_dir_pending_unchanged_directory(self, mock_redis):
         """Test pending check for unchanged directory"""
         # Mock stored mtime as current
@@ -191,7 +191,7 @@ class TestDirectoryTracking:
 
             assert result == False
 
-    @patch("ETL.load.src.main.r")
+    @patch("src.main.r")
     def test_mark_dir_loaded(self, mock_redis):
         """Test marking directory as loaded"""
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -205,7 +205,7 @@ class TestDirectoryTracking:
 class TestDirectoryDiscovery:
     """Test cases for directory discovery functions"""
 
-    @patch("ETL.load.src.main._is_dir_pending")
+    @patch("src.main._is_dir_pending")
     def test_find_pending_dirs_with_pending(self, mock_is_pending):
         """Test finding pending directories"""
         mock_is_pending.return_value = True
@@ -226,7 +226,7 @@ class TestDirectoryDiscovery:
             assert len(result) > 0
             mock_is_pending.assert_called()
 
-    @patch("ETL.load.src.main._is_dir_pending")
+    @patch("src.main._is_dir_pending")
     def test_find_pending_dirs_no_pending(self, mock_is_pending):
         """Test when no directories are pending"""
         mock_is_pending.return_value = False
@@ -243,7 +243,7 @@ class TestDirectoryDiscovery:
 class TestParquetReading:
     """Test cases for parquet file reading"""
 
-    @patch("ETL.load.src.main.pd.read_parquet")
+    @patch("src.main.pd.read_parquet")
     def test_read_parquet_dir_success(self, mock_read_parquet):
         """Test successful parquet directory reading"""
         mock_df = pd.DataFrame({"col1": [1, 2, 3]})
@@ -288,12 +288,12 @@ class TestParquetReading:
 class TestLoadOperations:
     """Test cases for load operations"""
 
-    @patch("ETL.load.src.main.find_pending_dirs")
-    @patch("ETL.load.src.main.read_parquet_dir")
-    @patch("ETL.load.src.main.upsert_dataframe")
-    @patch("ETL.load.src.main._mark_dir_loaded")
-    @patch("ETL.load.src.main.get_pg_conn")
-    @patch("ETL.load.src.main.publish_loaded")
+    @patch("src.main.find_pending_dirs")
+    @patch("src.main.read_parquet_dir")
+    @patch("src.main.upsert_dataframe")
+    @patch("src.main._mark_dir_loaded")
+    @patch("src.main.get_pg_conn")
+    @patch("src.main.publish_loaded")
     def test_run_load_success(
         self,
         mock_publish,
@@ -332,7 +332,7 @@ class TestLoadOperations:
             mock_publish.assert_called_once()
             mock_db_conn.close.assert_called_once()
 
-    @patch("ETL.load.src.main.find_pending_dirs")
+    @patch("src.main.find_pending_dirs")
     def test_run_load_no_pending(self, mock_find):
         """Test load operation when no directories are pending"""
         mock_find.return_value = []
@@ -341,8 +341,8 @@ class TestLoadOperations:
             # Should not raise exception
             run_load(temp_dir)
 
-    @patch("ETL.load.src.main.find_pending_dirs")
-    @patch("ETL.load.src.main.read_parquet_dir")
+    @patch("src.main.find_pending_dirs")
+    @patch("src.main.read_parquet_dir")
     def test_run_load_read_failure(self, mock_read, mock_find):
         """Test load operation when parquet reading fails"""
         mock_find.return_value = [("zone_hourly", "yellow")]
@@ -356,12 +356,12 @@ class TestLoadOperations:
 class TestMessageHandling:
     """Test cases for RabbitMQ message handling"""
 
-    @patch("ETL.load.src.main.pika")
-    @patch("ETL.load.src.main.run_load")
-    @patch("ETL.load.src.main.r")
+    @patch("src.main.pika")
+    @patch("src.main.run_load")
+    @patch("src.main.r")
     def test_on_message_load_trigger(self, mock_redis, mock_run_load, mock_pika):
         """Test message handler for load trigger"""
-        from ETL.load.src.main import on_message
+        from src.main import on_message
 
         mock_ch = MagicMock()
         mock_method = MagicMock()
@@ -384,7 +384,7 @@ class TestMessageHandling:
     @patch("ETL.load.src.main.r")
     def test_on_message_load_skip(self, mock_redis, mock_run_load, mock_pika):
         """Test message handler when load should be skipped"""
-        from ETL.load.src.main import on_message
+        from src.main import on_message
 
         mock_ch = MagicMock()
         mock_method = MagicMock()

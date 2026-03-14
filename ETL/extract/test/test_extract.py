@@ -6,7 +6,7 @@ from unittest.mock import Mock, patch, MagicMock
 from enum import Enum
 
 # Import functions from the src directory
-from ETL.extract.src.main import (
+from src.main import (
     _file_path_builder,
     _is_valid_parquet,
     _download_file,
@@ -161,7 +161,7 @@ class TestDownloadFile:
         assert result == DownloadResult.ALREADY_EXISTS
         mock_head.assert_not_called()  # Should not check availability
 
-    @patch("ETL.extract.src.main.requests.head")
+    @patch("src.main.requests.head")
     def test_head_request_404(self, mock_head):
         """Test 404 response from HEAD request"""
         mock_response = Mock()
@@ -175,7 +175,7 @@ class TestDownloadFile:
             self.test_url, timeout=15, allow_redirects=True
         )
 
-    @patch("ETL.extract.src.main.requests.head")
+    @patch("src.main.requests.head")
     def test_head_request_403(self, mock_head):
         """Test 403 response from HEAD request"""
         mock_response = Mock()
@@ -186,7 +186,7 @@ class TestDownloadFile:
 
         assert result == DownloadResult.ACCESS_DENIED
 
-    @patch("ETL.extract.src.main.requests.head")
+    @patch("src.main.requests.head")
     def test_head_request_other_error(self, mock_head):
         """Test non-OK status code from HEAD request"""
         mock_response = Mock()
@@ -198,7 +198,7 @@ class TestDownloadFile:
 
         assert result == DownloadResult.UNAVAILABLE
 
-    @patch("ETL.extract.src.main.requests.head")
+    @patch("src.main.requests.head")
     def test_head_request_exception(self, mock_head):
         """Test exception during HEAD request"""
         mock_head.side_effect = Exception("Network error")
@@ -207,9 +207,9 @@ class TestDownloadFile:
 
         assert result == DownloadResult.CHECK_FAILED
 
-    @patch("ETL.extract.src.main.requests.head")
-    @patch("ETL.extract.src.main.requests.get")
-    @patch("ETL.extract.src.main._is_valid_parquet")
+    @patch("src.main.requests.head")
+    @patch("src.main.requests.get")
+    @patch("src.main._is_valid_parquet")
     def test_successful_download(self, mock_validate, mock_get, mock_head):
         """Test successful file download"""
         # Mock HEAD response
