@@ -1,7 +1,7 @@
 import pytest
 import os
 import json
-from unittest.mock import Mock, patch, MagicMock
+from unittest.mock import Mock, patch, MagicMock, ANY
 from fastapi.testclient import TestClient
 from datetime import datetime, timezone
 
@@ -88,7 +88,7 @@ class TestAPIEndpoints:
                 "event": "extraction_completed",
                 "triggered_by": "api",
                 "summary": "Triggered via API",
-                "timestamp": pytest.any(str),
+                "timestamp": ANY,
             },
         )
 
@@ -120,7 +120,7 @@ class TestAPIEndpoints:
                 "event": "load_completed",
                 "triggered_by": "api",
                 "summary": "Triggered via API",
-                "timestamp": pytest.any(str),
+                "timestamp": ANY,
             },
         )
 
@@ -262,9 +262,9 @@ class TestInvalidationEndpoints:
         assert response.status_code == 200
         data = response.json()
         assert data["status"] == "deleted"
-        assert "etl:tracking:processed_files" in data["keys_deleted"]
+        assert "spark:processed_files" in data["keys_deleted"]
 
-        mock_redis.delete.assert_called_once_with("etl:tracking:processed_files")
+        mock_redis.delete.assert_called_once_with("spark:processed_files")
         mock_clear_dir.assert_called_once_with("/data/raw")
 
     @patch("src.main.r")
@@ -278,9 +278,9 @@ class TestInvalidationEndpoints:
         assert response.status_code == 200
         data = response.json()
         assert data["status"] == "invalidated"
-        assert "etl:tracking:processed_files" in data["keys_deleted"]
+        assert "spark:processed_files" in data["keys_deleted"]
 
-        mock_redis.delete.assert_called_once_with("etl:tracking:processed_files")
+        mock_redis.delete.assert_called_once_with("spark:processed_files")
         mock_clear_dir.assert_called_once_with("/data/processed")
 
     @patch("src.main.r")
@@ -294,11 +294,11 @@ class TestInvalidationEndpoints:
         assert response.status_code == 200
         data = response.json()
         assert data["status"] == "invalidated"
-        assert "etl:tracking:loaded_dirs" in data["keys_deleted"]
-        assert "etl:tracking:loaded_flag" in data["keys_deleted"]
+        assert "spark:loaded_dirs" in data["keys_deleted"]
+        assert "spark:loaded_flag" in data["keys_deleted"]
 
-        mock_redis.delete.assert_called_once_with("etl:tracking:loaded_dirs")
-        mock_redis.set.assert_called_once_with("etl:tracking:loaded_flag", "1")
+        mock_redis.delete.assert_called_once_with("spark:loaded_dirs")
+        mock_redis.set.assert_called_once_with("spark:loaded_flag", "1")
 
     @patch("src.main.r")
     @patch("src.main._clear_dir")
