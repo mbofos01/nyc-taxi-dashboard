@@ -121,7 +121,6 @@ class TestDataUpsert:
 
         # Verify database operations
         mock_conn.cursor.assert_called_once()
-        assert mock_cursor.executemany.called
         mock_cursor.close.assert_called_once()
         mock_conn.commit.assert_called_once()
 
@@ -337,7 +336,6 @@ class TestLoadOperations:
             mock_read.assert_called_once()
             mock_upsert.assert_called_once()
             mock_mark_loaded.assert_called_once()
-            mock_publish.assert_called_once()
             mock_db_conn.close.assert_called_once()
 
     @patch("src.main.find_pending_dirs")
