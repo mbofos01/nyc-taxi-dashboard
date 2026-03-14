@@ -82,6 +82,33 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Load environment variables
+        run: |
+          if [ -f .env ]; then
+            # Read .env file and set environment variables for subsequent steps
+            while IFS= read -r line; do
+              # Skip comments and empty lines
+              [[ $line =~ ^[[:space:]]*# ]] && continue
+              [[ -z "$line" ]] && continue
+              
+              # Remove inline comments
+              line=$(echo "$line" | sed 's/[[:space:]]*#.*$//')
+              
+              # Split on first = only
+              key=$(echo "$line" | cut -d'=' -f1)
+              value=$(echo "$line" | cut -d'=' -f2-)
+              
+              # Remove quotes from value if present
+              value=$(echo "$value" | sed 's/^"\(.*\)"$/\1/' | sed "s/^'\(.*\)'$/\1/")
+              
+              # Skip if key or value is empty
+              [[ -z "$key" ]] && continue
+              
+              echo "$key=$value" >> $GITHUB_ENV
+            done < .env
+            echo "Environment variables loaded from .env file"
+          fi
+
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
@@ -101,7 +128,7 @@ jobs:
       - name: Run tests
         working-directory: ${{ matrix.context }}
         run: |
-          python -m pytest test/ -v --tb=short
+          python -m pytest test/ -v --tb=short --asyncio-mode=auto -o asyncio_default_fixture_loop_scope=function
 
   build:
     name: Build ${{ matrix.service }}
