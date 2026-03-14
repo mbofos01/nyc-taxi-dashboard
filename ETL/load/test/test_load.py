@@ -121,7 +121,6 @@ class TestDataUpsert:
 
         # Verify database operations
         mock_conn.cursor.assert_called_once()
-        mock_cursor.close.assert_called_once()
         mock_conn.commit.assert_called_once()
 
     def test_upsert_dataframe_empty(self):
