@@ -365,9 +365,12 @@ class TestSparkIntegration:
         mock_get_spark.assert_called_once()
 
     @patch("src.main.shutil.rmtree")
+    @patch("src.main.PROCESSED_DATA_DIR", "/tmp/test")
     @patch("src.main.Path")
     @patch("src.main.SparkSession")
-    def test_write_parquet_operations(self, mock_spark_session, mock_path, mock_rmtree):
+    def test_write_parquet_operations(
+        self, mock_spark_session, mock_path, mock_processed_dir, mock_rmtree
+    ):
         """Test parquet writing operations"""
         from src.main import write_parquet
 
