@@ -140,7 +140,7 @@ class TestDownloadFile:
     def setup_method(self):
         """Set up test fixtures"""
         self.temp_dir = Path(tempfile.mkdtemp())
-        self.test_url = "https://example.com/test.parquet"
+        self.test_url = "http://nonexistent-domain-12345.com/test.parquet"
         self.dest_path = self.temp_dir / "test.parquet"
 
     def teardown_method(self):
@@ -150,7 +150,7 @@ class TestDownloadFile:
 
         shutil.rmtree(self.temp_dir, ignore_errors=True)
 
-    @patch("src.main.requests.head")
+    @patch("requests.head")
     def test_file_already_exists(self, mock_head):
         """Test when destination file already exists"""
         # Create the file first
@@ -161,7 +161,7 @@ class TestDownloadFile:
         assert result == DownloadResult.ALREADY_EXISTS
         mock_head.assert_not_called()  # Should not check availability
 
-    @patch("src.main.requests.head")
+    @patch("requests.head")
     def test_head_request_404(self, mock_head):
         """Test 404 response from HEAD request"""
         mock_response = Mock()
@@ -175,7 +175,7 @@ class TestDownloadFile:
             self.test_url, timeout=15, allow_redirects=True
         )
 
-    @patch("src.main.requests.head")
+    @patch("requests.head")
     def test_head_request_403(self, mock_head):
         """Test 403 response from HEAD request"""
         mock_response = Mock()
@@ -191,13 +191,14 @@ class TestDownloadFile:
         """Test non-OK status code from HEAD request"""
         mock_response = Mock()
         mock_response.status_code = 500
+        mock_response.ok = False
         mock_head.return_value = mock_response
 
         result = _download_file(self.test_url, self.dest_path)
 
         assert result == DownloadResult.UNAVAILABLE
 
-    @patch("src.main.requests.head")
+    @patch("requests.head")
     def test_head_request_exception(self, mock_head):
         """Test exception during HEAD request"""
         mock_head.side_effect = Exception("Network error")
