@@ -12,6 +12,7 @@ from pyspark.sql.types import (
     IntegerType,
     TimestampType,
 )
+import src.main as main_mod
 
 # Import functions from the src directory
 from src.main import (
@@ -365,7 +366,7 @@ class TestSparkIntegration:
         mock_get_spark.assert_called_once()
 
     @patch("src.main.shutil.rmtree")
-    @patch("src.main.PROCESSED_DATA_DIR", "/tmp/test")
+    @patch.object(main_mod, "PROCESSED_DATA_DIR", "/tmp/test")
     @patch("src.main.Path")
     @patch("src.main.SparkSession")
     def test_write_parquet_operations(
