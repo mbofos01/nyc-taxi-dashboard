@@ -96,9 +96,7 @@ class TestDataUpsert:
         mock_conn.cursor.return_value = mock_cursor
 
         # Mock the cursor's connection for psycopg2 execute_values
-        mock_connection = MagicMock()
-        mock_connection.encoding = "UTF8"
-        mock_cursor.connection = mock_connection
+        mock_cursor.connection.encoding = "UTF8"
 
         # Create sample DataFrame with required columns
         df = pd.DataFrame(
@@ -322,6 +320,11 @@ class TestLoadOperations:
         mock_read.return_value = mock_df
 
         with tempfile.TemporaryDirectory() as temp_dir:
+            # Create directory structure for zone_hourly/yellow
+            dataset_dir = Path(temp_dir) / "zone_hourly"
+            taxi_dir = dataset_dir / "yellow"
+            taxi_dir.mkdir(parents=True)
+
             run_load(temp_dir)
 
             # Verify operations were called
@@ -374,7 +377,7 @@ class TestMessageHandling:
             on_message(mock_ch, mock_method, None, message_body)
 
             mock_run_load.assert_called_once_with("/data/processed")
-            mock_redis.set.assert_called_once_with("etl:tracking:loaded_flag", "0")
+            mock_redis.set.assert_called_once_with("spark:loaded_flag", "0")
             mock_ch.basic_ack.assert_called_once()
 
     @patch("src.main.pika")
@@ -431,12 +434,18 @@ class TestPublishing:
 class TestScheduledOperations:
     """Test cases for scheduled load operations"""
 
+    @patch("src.main.find_pending_dirs")
     @patch("src.main.run_load")
-    def test_scheduled_load(self, mock_run_load):
+    def test_scheduled_load(self, mock_run_load, mock_find_pending):
         """Test scheduled load execution"""
         from src.main import scheduled_load
+
+        # Mock find_pending_dirs to return some pending dirs
+        mock_find_pending.return_value = [("zone_hourly", "yellow")]
 
         with patch.dict(os.environ, {"PROCESSED_DATA_DIR": "/data/processed"}):
             scheduled_load()
 
-            mock_run_load.assert_called_once_with("/data/processed")
+            mock_run_load.assert_called_once_with(
+                "/data/processed", only=[("zone_hourly", "yellow")]
+            )
