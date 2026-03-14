@@ -109,12 +109,15 @@ class TestDataUpsert:
             }
         )
 
-        upsert_dataframe(
-            mock_conn,
-            df,
-            "zone_hourly",
-            ["pickup_date", "pickup_hour", "pickup_location_id", "taxi_type"],
-        )
+        with patch("psycopg2.extras.execute_values") as mock_execute:
+            upsert_dataframe(
+                mock_conn,
+                df,
+                "zone_hourly",
+                ["pickup_date", "pickup_hour", "pickup_location_id", "taxi_type"],
+            )
+
+            mock_execute.assert_called_once()
 
         # Verify database operations
         mock_conn.cursor.assert_called_once()
@@ -318,6 +321,7 @@ class TestLoadOperations:
             }
         )
         mock_read.return_value = mock_df
+        mock_upsert.return_value = 2  # Number of rows upserted
 
         with tempfile.TemporaryDirectory() as temp_dir:
             # Create directory structure for zone_hourly/yellow
