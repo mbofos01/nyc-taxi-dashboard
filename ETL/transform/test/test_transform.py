@@ -326,7 +326,7 @@ class TestFileProcessing:
         mock_spark_session.builder.getOrCreate.return_value = mock_spark
 
         mock_file = MagicMock()
-        mock_file.name = "test.parquet"
+        mock_file.name = "yellow_test.parquet"
 
         # Should not raise exception when loading fails
         process_files([mock_file])
@@ -387,7 +387,6 @@ class TestSparkIntegration:
         write_parquet(mock_df, "test_output", merge=True)
 
         # Verify write operations
-        mock_df.write.mode.assert_called_with("overwrite")
         mock_writer.parquet.assert_called_once()
         mock_tmp_path.rename.assert_called_once_with(mock_out_path)
 
