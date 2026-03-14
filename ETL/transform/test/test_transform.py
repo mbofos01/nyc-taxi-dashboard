@@ -377,7 +377,11 @@ class TestSparkIntegration:
         # Mock Path objects
         mock_out_path = MagicMock()
         mock_tmp_path = MagicMock()
-        mocker.patch("src.main.Path").side_effect = [mock_out_path, mock_tmp_path]
+        mock_base = MagicMock()
+        mocker.patch("src.main.Path").return_value = mock_base
+        mock_base.__truediv__.side_effect = lambda x: (
+            mock_out_path if x == "test_output" else mock_tmp_path
+        )
         mock_out_path.exists.return_value = False
         mock_tmp_path.exists.return_value = True
         mock_tmp_path.rename = MagicMock()
