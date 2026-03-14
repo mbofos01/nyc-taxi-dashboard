@@ -109,7 +109,7 @@ class TestDataUpsert:
             }
         )
 
-        with patch("psycopg2.extras.execute_values") as mock_execute:
+        with patch("src.main.execute_values") as mock_execute:
             upsert_dataframe(
                 mock_conn,
                 df,
@@ -294,6 +294,7 @@ class TestParquetReading:
 class TestLoadOperations:
     """Test cases for load operations"""
 
+    @patch("src.main.execute_values")
     @patch("src.main.read_parquet_dir")
     @patch("src.main.upsert_dataframe")
     @patch("src.main._mark_dir_loaded")
@@ -306,6 +307,7 @@ class TestLoadOperations:
         mock_mark_loaded,
         mock_upsert,
         mock_read,
+        mock_execute,
     ):
         """Test successful load operation"""
         # Mock database connection
