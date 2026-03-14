@@ -312,11 +312,12 @@ class TestFileProcessing:
         mock_agg.assert_called_once()
         mock_write.assert_called()
 
+    @patch("src.main.r")
     @patch("src.main.load_and_validate_file")
     @patch("src.main.get_spark")
     @patch("src.main.SparkSession")
     def test_process_files_load_failure(
-        self, mock_spark_session, mock_get_spark, mock_load
+        self, mock_spark_session, mock_get_spark, mock_load, mock_redis
     ):
         """Test file processing when loading fails"""
         mock_load.return_value = None
@@ -350,21 +351,23 @@ class TestSparkIntegration:
     """Test cases for Spark operations"""
 
     @patch("src.main.SparkSession")
-    def test_spark_session_creation(self, mock_spark_session):
+    @patch("src.main.get_spark")
+    def test_spark_session_creation(self, mock_get_spark, mock_spark_session):
         """Test Spark session creation"""
         from src.main import get_spark
 
         mock_spark = MagicMock()
-        mock_spark_session.builder.getOrCreate.return_value = mock_spark
+        mock_get_spark.return_value = mock_spark
 
         result = get_spark()
 
         assert result == mock_spark
-        mock_spark_session.builder.getOrCreate.assert_called_once()
+        mock_get_spark.assert_called_once()
 
+    @patch("src.main.shutil.rmtree")
     @patch("src.main.Path")
     @patch("src.main.SparkSession")
-    def test_write_parquet_operations(self, mock_spark_session, mock_path):
+    def test_write_parquet_operations(self, mock_spark_session, mock_path, mock_rmtree):
         """Test parquet writing operations"""
         from src.main import write_parquet
 
