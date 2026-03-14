@@ -370,7 +370,7 @@ class TestSparkIntegration:
     @patch("src.main.Path")
     @patch("src.main.SparkSession")
     def test_write_parquet_operations(
-        self, mock_spark_session, mock_path, mock_processed_dir, mock_rmtree
+        self, mock_spark_session, mock_path, mock_processed_dir, rmtree_patch
     ):
         """Test parquet writing operations"""
         from src.main import write_parquet
