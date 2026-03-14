@@ -365,20 +365,19 @@ class TestSparkIntegration:
         assert result == mock_spark
         mock_get_spark.assert_called_once()
 
-    @patch("src.main.shutil.rmtree")
-    @patch.object(main_mod, "PROCESSED_DATA_DIR", "/tmp/test")
-    @patch("src.main.Path")
-    @patch("src.main.SparkSession")
-    def test_write_parquet_operations(
-        self, mock_spark_session, mock_path, mock_processed_dir, rmtree_patch
-    ):
+    def test_write_parquet_operations(self, mocker):
         """Test parquet writing operations"""
         from src.main import write_parquet
+
+        mocker.patch("src.main.shutil.rmtree")
+        mocker.patch.object(main_mod, "PROCESSED_DATA_DIR", "/tmp/test")
+        mocker.patch("src.main.Path")
+        mocker.patch("src.main.SparkSession")
 
         # Mock Path objects
         mock_out_path = MagicMock()
         mock_tmp_path = MagicMock()
-        mock_path.side_effect = [mock_out_path, mock_tmp_path]
+        mocker.patch("src.main.Path").side_effect = [mock_out_path, mock_tmp_path]
         mock_out_path.exists.return_value = False
         mock_tmp_path.exists.return_value = True
         mock_tmp_path.rename = MagicMock()
