@@ -34,7 +34,7 @@ services:
       - ./ETL/api:/app
       - taxi_raw_data:${RAW_DATA_DIR:-/data/raw}
       - taxi_processed_data:${PROCESSED_DATA_DIR:-/data/processed}
-    command: ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "${ETL_API_PORT:-8000}", "--root-path", "/${ETL_API_HOST:-etl-api}", "--reload"]
+    command: ["uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "${ETL_API_PORT:-8000}", "--root-path", "/${ETL_API_HOST:-etl-api}", "--reload"]
     ports:
       - "${ETL_API_PORT:-8000}:${ETL_API_PORT:-8000}"
     env_file: .env
@@ -60,7 +60,7 @@ services:
     volumes:
       - ./ETL/extract:/app
       - taxi_raw_data:${RAW_DATA_DIR:-/data/raw}
-    command: ["python", "main.py"]
+    command: ["python", "src/main.py"]
     env_file: .env
     depends_on:
       rabbitMQ:
@@ -81,7 +81,7 @@ services:
       - ./ETL/transform:/app
       - taxi_raw_data:${RAW_DATA_DIR:-/data/raw}
       - taxi_processed_data:${PROCESSED_DATA_DIR:-/data/processed}
-    command: ["python", "main.py"]
+    command: ["python", "src/main.py"]
     env_file: .env
     depends_on:
       rabbitMQ:
@@ -105,7 +105,7 @@ services:
     volumes:
       - ./ETL/load:/app
       - taxi_processed_data:${PROCESSED_DATA_DIR:-/data/processed}
-    command: ["python", "main.py"]
+    command: ["python", "src/main.py"]
     env_file: .env
     depends_on:
       rabbitMQ:

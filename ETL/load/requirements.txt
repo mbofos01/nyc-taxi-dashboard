@@ -5,3 +5,8 @@ psycopg2-binary==2.9.10
 prometheus_client==0.20.0
 redis==7.2.0
 apscheduler==3.11.0
+
+# Testing dependencies
+pytest==8.3.4
+pytest-mock==3.14.0
+pytest-cov==6.0.0
